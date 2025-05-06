@@ -1,0 +1,50 @@
+# Cache and temporary files
+*.log
+*.lock
+*.bak
+*.swp
+*.tmp
+*~
+
+# System/user-specific stuff
+.DS_Store
+.cache/
+nv/
+.local/share/Trash/
+
+# Unused configs and apps
+discord/
+Slack/
+Code/
+Electron/
+qt5ct/
+Kvantum/
+dunst/
+pulse/
+picom*
+light/
+fish/
+bitwarden/
+'Bitwarden CLI'/
+uv/
+yay/
+xarchiver/
+xfce4/
+geany/
+github-copilot/
+openbox/
+bspwm/
+i3/
+htop/
+neofetch/
+alacritty/
+Bitwarden/
+
+# System config not meant for versioning
+user-dirs.dirs
+user-dirs.locale
+mimeapps.list
+
+# Optional
+README.md
+

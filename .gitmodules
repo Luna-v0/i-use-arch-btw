@@ -1,0 +1,3 @@
+[submodule "/home/edudaluna/.config/nvim"]
+	path = /home/edudaluna/.config/nvim
+	url = git@github.com:Luna-v0/nvim-settings.git
