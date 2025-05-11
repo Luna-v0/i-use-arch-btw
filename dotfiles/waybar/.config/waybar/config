@@ -2,8 +2,8 @@
   "layer": "top",
   "position": "top",
   "modules-left": ["hyprland/workspaces"],
-  "modules-center": ["clock"],
-  "modules-right": ["cpu", "memory", "pulseaudio","network", "battery"],
+  "modules-center": ["custom/cpu","clock","custom/gpu"],
+  "modules-right": [ "pulseaudio","network", "battery"],
 
   "hyprland/workspaces": {
     "format": "{icon}",
@@ -11,10 +11,6 @@
     "all-outputs": false
   },
 
-  "cpu": {
-    "format": "    {usage}%",
-    "tooltip": false
-  },
 
   "network":{
   "interface": "wlan0",  // or "eth0", "enp3s0", "wlp2s0", etc.
@@ -23,10 +19,6 @@
   "tooltip": true
   },
 
-  "memory": {
-    "format": "  💾 {used:0.1f}G",
-    "tooltip": false
-  },
 
   "pulseaudio": {
     "format": "  {volume}%",
@@ -37,5 +29,19 @@
     "format": "  {capacity}%",
     "tooltip": false
   },
+  "custom/cpu": {
+      "exec": "~/.config/waybar/scripts/cpu_temp.sh",
+      "interval": 5,
+      "tooltip": false,
+      "format": "{}"
+  },
+  "custom/gpu": {
+      "exec": "~/.config/waybar/scripts/gpu_temp.sh",
+      "interval": 5,
+      "tooltip": false,
+      "format": "{}"
+  },
+
+
 }
 

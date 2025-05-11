@@ -5,37 +5,43 @@
   border: none;
 }
 
-window {
-  background-color: #000000;
-  color: #f5f5f5;
-  border-bottom: 10px solid #000000;
+window#waybar {
+  background: transparent;
+  border: none;
+  color: #000;
   padding: 4px 10px;
 }
 
+
 #workspaces button {
-  padding: 0 10px;
-  margin: 0 4px;
-  background: #000;
+  background: #fff;
   border-radius: 6px;
-  color: #bbb;
+  color: #000;
   transition: all 0.3s ease-in-out;
 }
 
 #workspaces button.active {
-  background: #ffffff;
-  color: #000000;
+  background: #00f4cf;
+  color: #000;
   font-weight: bold;
 }
 
-#clock, #pulseaudio, #network, #battery {
-  background-color: #000;
+#custom-cpu, #custom-gpu, #clock, #pulseaudio, #network, #battery {
+  background-color: #fff;
   padding: 4px 10px;
   margin: 0 6px;
   border-radius: 6px;
+  font-weight: bold;
 }
 
 #custom-arrow {
-  color: #f5f5f5;
+  color: #000;
   margin: 0 5px;
 }
+
+.modules-right, .modules-left,.modules-center {
+    background-color: #fff;
+    border-radius: 12px;
+}
+
 
