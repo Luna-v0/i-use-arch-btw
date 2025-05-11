@@ -26,7 +26,7 @@ window#waybar {
   font-weight: bold;
 }
 
-#custom-cpu, #custom-gpu, #clock, #pulseaudio, #network, #battery {
+#custom-cpu, #custom-gpu, #clock, #battery, #custom-bluetooth, #custom-audio, #network {
   background-color: #fff;
   padding: 4px 10px;
   margin: 0 6px;

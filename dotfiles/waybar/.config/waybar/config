@@ -3,31 +3,22 @@
   "position": "top",
   "modules-left": ["hyprland/workspaces"],
   "modules-center": ["custom/cpu","clock","custom/gpu"],
-  "modules-right": [ "pulseaudio","network", "battery"],
+  "modules-right": ["custom/audio","custom/bluetooth","network", "battery"],
 
   "hyprland/workspaces": {
     "format": "{icon}",
     "on-click": "activate",
     "all-outputs": false
   },
-
-
-  "network":{
-  "interface": "wlan0",  // or "eth0", "enp3s0", "wlp2s0", etc.
-  "format": "  {essid} ({signalStrength}%)",
-  "format-disconnected": "⚠️ Disconnected",
-  "tooltip": true
-  },
-
-
-  "pulseaudio": {
-    "format": "  {volume}%",
-    "tooltip": false
-  },
-
   "battery": {
     "format": "  {capacity}%",
     "tooltip": false
+  },
+  "network":{
+    "interface": "wlan0",
+    "format": "  {essid}",
+    "tooltip": true,
+    "on-click": "kitty -e nmtui"
   },
   "custom/cpu": {
       "exec": "~/.config/waybar/scripts/cpu_temp.sh",
@@ -41,7 +32,16 @@
       "tooltip": false,
       "format": "{}"
   },
-
-
+ "custom/audio":{
+    "exec":  "~/.config/waybar/scripts/audio_control.sh",
+    "interval":15,
+    "return-type": "json",
+    "on-click":"pavucontrol"
+ },
+ "custom/bluetooth":{
+    "exec":  "~/.config/waybar/scripts/bluetooth.sh",
+    "interval":15,
+    "return-type": "json",
+    "on-click":"blueman-manager"
+ }
 }
-
