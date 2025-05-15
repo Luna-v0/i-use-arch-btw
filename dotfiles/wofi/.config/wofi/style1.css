@@ -27,7 +27,7 @@ window {
 
 #entry:selected {
   background-color: #ffffff;
-  color: #000000;
+  color: red;
   font-weight: bold;
 }
 
