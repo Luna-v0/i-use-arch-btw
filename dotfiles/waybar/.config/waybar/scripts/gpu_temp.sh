@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # if hostname is fantasy2
-if [[ "$(hostname)" == "fantasy2" ]]; then
+if [[ "$(hostname)" == "Fantasy2" ]]; then
     used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits)
     total=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits)
 

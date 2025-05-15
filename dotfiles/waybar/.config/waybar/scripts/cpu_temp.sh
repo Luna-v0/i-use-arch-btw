@@ -10,7 +10,7 @@ cpu_usage=$(mpstat 1 1 | awk '/Average/ {print 100 - $NF}')
 
 
 # CPU temp rounded
-if [[ $(hostname) == "fantasy2" ]]; then
+if [[ $(hostname) == "Fantasy2" ]]; then
     cpu_temp=$(sensors | awk '/k10temp-pci-00c3/,/^$/' | grep 'Tctl' | awk '{printf("%d°C", $2)}')
 else
     cpu_temp=$(sensors | awk '/coretemp-isa-0000/,/^$/' | grep 'Package id 0' | awk '{printf("%d°C", $4)}')
