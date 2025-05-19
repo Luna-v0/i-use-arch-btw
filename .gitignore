@@ -5,7 +5,7 @@
 *.swp
 *.tmp
 *~
-
+*generated.conf
 # System/user-specific stuff
 .DS_Store
 .cache/

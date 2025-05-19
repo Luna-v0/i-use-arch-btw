@@ -35,7 +35,7 @@ curl -Ls https://astral.sh/uv/install.sh | bash
 # GUI tools
 sudo pacman -S --needed --noconfirm \
   wofi waybar mako neovim  stow \
-  bitwarden-cli wf-rcorder slurp grim
+  bitwarden-cli wf-recorder slurp grim
 
 # VPN support
 sudo pacman -S --needed --noconfirm openvpn networkmanager-openvpn
