@@ -21,9 +21,12 @@ window#waybar {
 }
 
 #workspaces button.active {
-  background: #00f4cf;
-  color: #000;
+  color: #fff;
+  border: solid;
   font-weight: bold;
+  border-color: #fff;
+  background-color: #000;
+  border-width: 1px;
 }
 
 #custom-cpu, #custom-gpu, #clock, #battery, #custom-bluetooth, #custom-audio, #network {
