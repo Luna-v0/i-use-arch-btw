@@ -13,6 +13,6 @@
 [submodule "dotfiles/tmux/tmp"]
 	path = dotfiles/tmux/tmp
 	url = git@github.com:tmux-plugins/tpm.git
-[submodule "dotfiles/tmux/.config/tmux/tmp"]
-	path = dotfiles/tmux/.config/tmux/tmp
+[submodule "dotfiles/tmux/.config/tmux/tpm"]
+	path = dotfiles/tmux/.config/tmux/tpm
 	url = git@github.com:tmux-plugins/tpm.git
