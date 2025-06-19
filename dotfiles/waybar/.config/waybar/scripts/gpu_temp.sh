@@ -17,4 +17,12 @@ if [[ "$(hostname)" == "Fantasy2" ]]; then
 
 
     echo "$vram_usage | GPU ${gpu_usage}% | $gpu_temp°C"
+
+else
+    # just print date info instead
+    # with the day of the week
+    current_date=$(date +"%d/%m/%Y %A")
+    echo "$current_date"
+
 fi
+
