@@ -35,10 +35,22 @@ curl -Ls https://astral.sh/uv/install.sh | bash
 # GUI tools
 sudo pacman -S --needed --noconfirm \
   wofi waybar mako neovim  stow \
-  bitwarden-cli wf-recorder slurp grim btop tree
+  bitwarden-cli wf-recorder slurp grim btop tree \
+  hyprpaper hyprlock hypridle
+
 
 # VPN support
 sudo pacman -S --needed --noconfirm openvpn networkmanager-openvpn
+
+cd dotfiles
+# Stow dotfiles
+if [ ! -d "$HOME/.config" ]; then
+  mkdir -p "$HOME/.config"
+fi
+
+stow -t "$HOME" --adopt --restow mako nvim waybar wofi mako kitty tmux
+
+git submodule update --init --recursive
 
 echo "✅ Base setup complete. You may need to log out/in to apply Docker group changes."
 

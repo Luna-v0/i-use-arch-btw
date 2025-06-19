@@ -10,3 +10,9 @@
 [submodule "dotfiles/nvim/.config/nvim"]
 	path = dotfiles/nvim/.config/nvim
 	url = git@github.com:Luna-v0/nvim-settings.git
+[submodule "dotfiles/tmux/tmp"]
+	path = dotfiles/tmux/tmp
+	url = git@github.com:tmux-plugins/tpm.git
+[submodule "dotfiles/tmux/.config/tmux/tmp"]
+	path = dotfiles/tmux/.config/tmux/tmp
+	url = git@github.com:tmux-plugins/tpm.git
