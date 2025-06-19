@@ -11,7 +11,7 @@
 .cache/
 nv/
 .local/share/Trash/
-
+dotfiles/tmux/.config/tmux/plugins
 # Unused configs and apps
 discord/
 Slack/
