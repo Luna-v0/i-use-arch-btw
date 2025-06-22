@@ -1,3 +1,3 @@
 #!/usr/bin/env zx --quiet
 
-await $`echo "Hello, world!"`;
+console.log("Hello, world!");
