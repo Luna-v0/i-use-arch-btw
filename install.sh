@@ -36,7 +36,7 @@ curl -Ls https://astral.sh/uv/install.sh | bash
 sudo pacman -S --needed --noconfirm \
   wofi waybar mako neovim  stow \
   bitwarden-cli wf-recorder slurp grim btop tree \
-  hyprpaper hyprlock hypridl zshe
+  hyprpaper hyprlock hypridle zsh
 
 
 
