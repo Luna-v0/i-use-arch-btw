@@ -27,7 +27,7 @@ fi
 
 # Install Node.js (LTS) + npm + pnpm
 nvm install --lts
-npm install -g pnpm zx
+npm install -g pnpm zx @google/gemini-cli
 
 # uv (Python fast package manager)
 curl -Ls https://astral.sh/uv/install.sh | bash
