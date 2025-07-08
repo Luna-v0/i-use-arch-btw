@@ -1,0 +1,21 @@
+# ~/.config/tmuxinator/default.yml
+
+name: default
+root: ~/
+
+windows:
+  - terminal:
+      layout: even-horizontal
+      panes:
+        - # Pane 0: Terminal
+  - nvim:
+      root: /mnt/hdd1/Repos/i-use-arch-btw
+      panes:
+        - nvim
+  - venv_terminal:
+      root: /mnt/hdd1/Repos/i-use-arch-btw
+      panes:
+        - if [ -d ".venv" ]; then source .venv/bin/activate; elif [ -d "venv" ]; then source venv/bin/activate; fi
+  - gemini_command:
+      panes:
+        - # Add your gemini command here

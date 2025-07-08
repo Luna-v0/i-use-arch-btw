@@ -36,9 +36,7 @@ curl -Ls https://astral.sh/uv/install.sh | bash
 sudo pacman -S --needed --noconfirm \
   wofi waybar mako neovim  stow \
   bitwarden-cli wf-recorder slurp grim btop tree \
-  hyprpaper hyprlock hypridle zsh
-
-
+  hyprpaper hyprlock hypridle zsh gum
 
 # VPN support
 sudo pacman -S --needed --noconfirm openvpn networkmanager-openvpn
@@ -52,6 +50,10 @@ fi
 stow -t "$HOME" --adopt --restow mako nvim waybar wofi mako kitty tmux zsh hyprland
 
 git submodule update --init --recursive
+
+# Create symlink for tmuxinator project template
+mkdir -p ~/.config/tmuxinator/ && ln -sf /mnt/hdd1/Repos/i-use-arch-btw/dotfiles/tmux/.config/tmux/project_template.yml ~/.config/tmuxinator/project_template.ym
+
 
 NEW_ZSH_FILE="$HOME/.config/zsh/zshrc"   
 
