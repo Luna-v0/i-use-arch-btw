@@ -5,7 +5,7 @@ set -e
 echo "🔧 Installing base packages..."
 
 # Slack & Discord (from AUR, assuming yay is installed)
-yay -S --needed --noconfirm slack-desktop discord zoom-us
+yay -S --needed --noconfirm slack-desktop discord zoom-us vivaldi-bin
 
 # Docker & Docker Compose
 sudo pacman -S --needed --noconfirm docker docker-compose
