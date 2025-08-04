@@ -47,7 +47,7 @@ if [ ! -d "$HOME/.config" ]; then
   mkdir -p "$HOME/.config"
 fi
 
-stow -t "$HOME" --adopt --restow mako nvim waybar wofi mako kitty tmux zsh hyprland
+stow -t "$HOME" --adopt --restow mako nvim waybar wofi mako kitty tmux zsh hyprland 
 
 git submodule update --init --recursive
 
