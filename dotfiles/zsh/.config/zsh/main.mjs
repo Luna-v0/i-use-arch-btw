@@ -10,4 +10,3 @@ for (const f of stdout.trim().split("\n").filter(Boolean)) {
   console.log(`alias ${name}='zx "${f}" "$@"'`);
 }
 
-// TODO fix it
