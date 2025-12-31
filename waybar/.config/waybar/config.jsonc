@@ -4,21 +4,19 @@
   "position": "top",
   "spacing": 0,
   "height": 26,
-  "modules-left": ["custom/omarchy", "hyprland/workspaces"],
-  "modules-center": ["clock", "custom/update", "custom/screenrecording-indicator"],
+  "modules-left": ["custom/date-time", "hyprland/workspaces"],
+  "modules-center": ["custom/cpu-temp","custom/omarchy", "custom/gpu-temp", "custom/update", "custom/screenrecording-indicator"],
   "modules-right": [
     "group/tray-expander",
     "bluetooth",
     "network",
     "pulseaudio",
-    "cpu",
     "battery"
   ],
   "hyprland/workspaces": {
     "on-click": "activate",
     "format": "{icon}",
     "format-icons": {
-      "default": "",
       "1": "1",
       "2": "2",
       "3": "3",
@@ -28,8 +26,7 @@
       "7": "7",
       "8": "8",
       "9": "9",
-      "10": "0",
-      "active": "󱓻"
+      "10": "0"
     },
     "persistent-workspaces": {
       "1": [],
@@ -53,11 +50,20 @@
     "signal": 7,
     "interval": 3600
   },
-
-  "cpu": {
+  "custom/cpu-temp": {
+    "exec": "$HOME/.dotfiles/waybar/.config/waybar/scripts/cpu_temp.sh",
     "interval": 5,
-    "format": "󰍛",
-    "on-click": "omarchy-launch-or-focus-tui btop"
+    "tooltip": false
+  },
+  "custom/gpu-temp": {
+    "exec": "$HOME/.dotfiles/waybar/.config/waybar/scripts/gpu_temp.sh",
+    "interval": 5,
+    "tooltip": false
+  },
+  "custom/date-time": {
+    "exec": "$HOME/.dotfiles/waybar/.config/waybar/scripts/date_time.sh",
+    "interval": 60,
+    "return-type": "json"
   },
   "clock": {
     "format": "{:L%A %H:%M}",

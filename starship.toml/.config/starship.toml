@@ -13,7 +13,6 @@ $git_metrics\
 $docker_context\
 $package\
 $python\
-$venv\
 [╰─](bold cyan)\
 $character\
 """
@@ -111,10 +110,4 @@ pyenv_prefix = "pyenv "
 python_binary = ["python", "python3", "python2"]
 detect_files = [".python-version", "Pipfile", "__pycache__", "pyproject.toml", "requirements.txt", "setup.py", "tox.ini"]
 detect_folders = []
-disabled = false
-
-[venv]
-format = "[$symbol$name]($style) "
-symbol = "🐍 "
-style = "bold green"
 disabled = false
