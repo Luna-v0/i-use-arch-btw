@@ -5,15 +5,15 @@
   font-size: 13px;
   background: transparent;
   border: none;
+  padding: 1px;
 }
 
 window#waybar {
   background: @accent;
   border: none;
   color: @background;
-  padding: 4px 10px;
   border-radius: 12px;
-  margin: 8px;
+  padding: 2px 2px;
 }
 
 
@@ -45,7 +45,7 @@ window#waybar {
 #workspaces button.active {
   all: initial;
   background: @background;
-  box-shadow: 0 0 0 3px @accent inset;
+  box-shadow: 0 0 0 1px @accent inset;
   border-radius: 6px;
   padding: 0 6px;
   min-width: 9px;
@@ -124,7 +124,7 @@ tooltip label {
 }
 
 #custom-date-time {
-  box-shadow: 0 0 0 3px @accent inset;
+  box-shadow: 0 0 0 1px @accent inset;
   padding: 0 6px;
   background: @background;
   font-family: "CaskaydiaMono Nerd Font", sans-serif;
@@ -132,9 +132,10 @@ tooltip label {
   font-weight: bold;
   color: @accent;
   transition: all 0.3s ease-in-out;
+  border-radius: 6px;
 }
 
 #custom-cpu-temp,
 #custom-gpu-temp {
- color: @background
+ color: @background;
 }
