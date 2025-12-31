@@ -1,6 +1,22 @@
 add_newline = true
 command_timeout = 200
-format = "[$directory$git_branch$git_status]($style)$character"
+format = """[╭─](bold cyan)\
+$time\
+$username\
+$hostname\
+$localip\
+$shlvl\
+$directory\
+$git_branch\
+$git_status\
+$git_metrics\
+$docker_context\
+$package\
+$python\
+$venv\
+[╰─](bold cyan)\
+$character\
+"""
 
 [character]
 error_symbol = "[✗](bold cyan)"
@@ -30,3 +46,75 @@ stashed    = ""
 staged     = ""
 renamed    = ""
 deleted    = ""
+
+[time]
+disabled = false
+format = "[$time]($style) "
+style = "bold cyan"
+use_12hr = false
+time_format = "%H:%M:%S"
+
+[username]
+show_always = false
+style_user = "bold cyan"
+style_root = "bold red"
+format = "[$user]($style)@"
+
+[hostname]
+ssh_only = true
+ssh_symbol = "🌐 "
+format = "[$hostname]($style) "
+style = "bold cyan"
+trim_at = "."
+
+[localip]
+ssh_only = true
+format = "[$localipv4]($style) "
+style = "bold cyan"
+
+[shlvl]
+disabled = false
+symbol = "↕️ "
+format = "[$symbol$shlvl]($style) "
+style = "bold yellow"
+threshold = 2
+
+[git_metrics]
+added_style = "bold green"
+deleted_style = "bold red"
+only_nonzero_diffs = true
+format = "([+$added]($added_style) )([-$deleted]($deleted_style) )"
+disabled = false
+
+[docker_context]
+format = "via [$symbol$context]($style) "
+symbol = "🐳 "
+style = "blue bold"
+only_with_files = false
+detect_files = ["docker-compose.yml", "docker-compose.yaml", "Dockerfile"]
+detect_folders = []
+disabled = false
+
+[package]
+format = "is [$symbol$version]($style) "
+symbol = "📦 "
+style = "208 bold"
+display_private = false
+disabled = false
+
+[python]
+format = "via [$symbol($pyenv_prefix$version )]($style) "
+symbol = "🐍 "
+style = "yellow bold"
+pyenv_version_name = false
+pyenv_prefix = "pyenv "
+python_binary = ["python", "python3", "python2"]
+detect_files = [".python-version", "Pipfile", "__pycache__", "pyproject.toml", "requirements.txt", "setup.py", "tox.ini"]
+detect_folders = []
+disabled = false
+
+[venv]
+format = "[$symbol$name]($style) "
+symbol = "🐍 "
+style = "bold green"
+disabled = false

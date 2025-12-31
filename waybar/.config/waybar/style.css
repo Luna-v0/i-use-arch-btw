@@ -24,6 +24,7 @@
   padding: 0 6px;
   margin: 0 1.5px;
   min-width: 9px;
+  border-radius: 6px;
 }
 
 #workspaces button.empty {
@@ -57,7 +58,8 @@
 }
 
 tooltip {
-  padding: 2px;
+  padding: 8px;
+  border-radius: 8px;
 }
 
 #custom-update {
