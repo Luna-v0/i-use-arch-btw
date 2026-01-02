@@ -24,8 +24,12 @@ window#waybar {
 
 .modules-right {
   margin-right: 8px;
+  color: @background;
 }
 
+.modules-center {
+  font-weight: bold;
+}
 
 
 #workspaces button {
