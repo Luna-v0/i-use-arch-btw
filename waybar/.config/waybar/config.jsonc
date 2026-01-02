@@ -2,9 +2,9 @@
   "reload_style_on_change": true,
   "layer": "top",
   "position": "top",
-  "output":"DP-1",
   "spacing": 0,
   "height": 26,
+  "output":"DP-2",
   "modules-left": ["custom/date-time", "hyprland/workspaces"],
   "modules-center": ["custom/cpu-temp","custom/omarchy", "custom/gpu-temp", "custom/update", "custom/screenrecording-indicator"],
   "modules-right": [
@@ -17,6 +17,7 @@
   "hyprland/workspaces": {
     "on-click": "activate",
     "format": "{icon}",
+    "all-outputs": true,
     "format-icons": {
       "1": "1",
       "2": "2",
