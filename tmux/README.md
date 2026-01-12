@@ -124,3 +124,4 @@ To add any of these:
 - Make sure you're pressing the correct prefix key (`Ctrl-a` in your config)
 - Try reloading: `tmux source ~/.config/tmux/tmux.conf`
 
+
