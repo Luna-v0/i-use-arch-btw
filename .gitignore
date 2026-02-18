@@ -1,2 +1,5 @@
 hypr/.config/hypr/input.config
 hypr/.config/hypr/shaders/*
+
+
+**/node_modules/
