@@ -1,0 +1,14 @@
+# Derived model for minuet-ai inline (fill-in-the-middle) completion in Neovim.
+# Base is qwen2.5-coder:7b-base: a non-reasoning, FIM-native code model (the right
+# class of model for sub-second ghost text, unlike the reasoning finetunes).
+# This just raises the runtime context window so minuet's file context isn't
+# truncated, and pins code-friendly sampling.
+#
+# Build/update:  ollama create qwen2.5-coder-minuet -f qwen2.5-coder-minuet.Modelfile
+# Remove:        ollama rm qwen2.5-coder-minuet
+# Lower latency: change FROM to qwen2.5-coder:3b-base and rebuild.
+FROM qwen2.5-coder:7b-base
+
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
