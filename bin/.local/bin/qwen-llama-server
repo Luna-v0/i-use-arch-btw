@@ -15,7 +15,30 @@
 #
 #   qwen-llama-server                  # foreground (for the systemd service)
 #   LLAMA_DETACH=1 qwen-llama-server   # start detached, return immediately (dsh-go)
+#
+# OPT-IN PROFILES (LLAMA_PROFILE). Unset = everything below behaves exactly as before.
+# A profile only fills in the LLAMA_* knobs you haven't set yourself, and adds its own
+# flags (sampling, slots, batch). Measured 2026-10-13 with /mnt/hd/Repos/local-llm-bench
+# (37-task eval + 2-stream throughput); numbers are from that run.
+#   LLAMA_PROFILE=smart   Qwen3.8-27B dense (unsloth UD-IQ4_XS, 14.3 GB) entirely in VRAM,
+#                         2 slots over a 64k shared KV pool, Qwen card sampling. A stronger
+#                         model than Qwen3.6-35B-A3B (Terminal-Bench 2.1 73.0, SWE-bench Pro
+#                         61.7); ~17 tok/s per agent with 2 agents, prompt ~770 tok/s.
+#   LLAMA_PROFILE=q36     Today's Qwen3.6-35B-A3B Q4_K_M with fixed settings: Qwen card
+#                         "precise coding" sampling, exactly 2 slots over a 256k pool, more
+#                         expert layers back on the GPU, bigger prompt micro-batch.
 set -uo pipefail
+PROFILE_ARGS=()
+case "${LLAMA_PROFILE:-}" in
+  "") ;;
+  smart)
+    : "${LLAMA_GGUF_FILE:=Qwen3.8-27B-UD-IQ4_XS.gguf}" "${LLAMA_CTX:=65536}" "${LLAMA_DENSE:=1}"
+    PROFILE_ARGS=(-np 2 -ub 512 --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0) ;;
+  q36)
+    : "${LLAMA_GGUF_FILE:=Qwen3.6-35B-A3B-Q4_K_M.gguf}" "${LLAMA_CTX:=262144}" "${LLAMA_NCMOE:=22}"
+    PROFILE_ARGS=(-np 2 -ub 1024 -b 2048 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0) ;;
+  *) echo "unknown LLAMA_PROFILE='$LLAMA_PROFILE' (use smart or q36, or unset it)"; exit 1 ;;
+esac
 IMG="${LLAMA_IMG:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
 GGUF_DIR="${LLAMA_GGUF_DIR:-$HOME/.cache/gguf}"
 FILE="${LLAMA_GGUF_FILE:-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-fit16gib.gguf}"
@@ -61,7 +84,8 @@ args=(--name "$NAME" --gpus all "${uvm[@]}" "${health[@]}" -v "$GGUF_DIR":/model
   --slot-save-path /slots --cache-idle-slots
   --kv-unified --cache-ram "${LLAMA_CACHE_RAM:-32768}" -ctxcp "${LLAMA_CTX_CHECKPOINTS:-64}"
   -m "/models/$FILE" -a "$ALIAS" -ngl "$NGL" -fa on
-  --cache-type-k q8_0 --cache-type-v q8_0 -c "$CTX" --jinja --host 0.0.0.0 --port "$PORT")
+  --cache-type-k q8_0 --cache-type-v q8_0 -c "$CTX" --jinja --host 0.0.0.0 --port "$PORT"
+  ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"})
 # Mode selection:
 #   OT set           -> dense FFN-split (attention on GPU, fused kernel ON, fast)
 #   NGL<99           -> dense whole-layer offload (attention too -> fused OFF, slow, huge ctx)
@@ -89,7 +113,7 @@ if [ -n "${LLAMA_DRAFT:-}" ] && [ -f "$GGUF_DIR/$LLAMA_DRAFT" ]; then
 fi
 
 if [ -n "${LLAMA_DETACH:-}" ]; then
-  echo "starting '$ALIAS' detached [$mode ctx=$CTX] $FILE"; exec docker run -d "${args[@]}"
+  echo "starting '$ALIAS' detached [$mode ctx=$CTX${LLAMA_PROFILE:+ profile=$LLAMA_PROFILE}] $FILE"; exec docker run -d "${args[@]}"
 else
-  echo "serving '$ALIAS' -> http://127.0.0.1:$PORT/v1  [$mode ctx=$CTX] $FILE"; exec docker run --rm "${args[@]}"
+  echo "serving '$ALIAS' -> http://127.0.0.1:$PORT/v1  [$mode ctx=$CTX${LLAMA_PROFILE:+ profile=$LLAMA_PROFILE}] $FILE"; exec docker run --rm "${args[@]}"
 fi

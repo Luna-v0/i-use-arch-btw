@@ -15,7 +15,7 @@ usage() {
 dsh-go — start the local coding model, open the dsh TUI, stop the model on exit.
 
 USAGE
-  dsh-go [--flash|--nemo] [--resume [ID]] [profile] [other dsh flags...]
+  dsh-go [--smart|--flash|--nemo] [--resume [ID]] [profile] [other dsh flags...]
 
 MODELS  (same port + alias in every mode, so dsh needs no reconfig)
   (default)  Qwen3.6-35B-A3B Q4_K_M — SWE-bench 73.4 coding flagship. 3B active, experts
@@ -23,6 +23,11 @@ MODELS  (same port + alias in every mode, so dsh needs no reconfig)
   --flash    Qwen3.8-Flash-Next 125B-A6B (IQ4_XS) — biggest smarts, ~19 tok/s warm; experts
              page from RAM/SSD, so the FIRST prompt is slow. Default ctx 32k.
   --nemo     Nemotron 3.5 Lightning 30B-A3B — ~62 tok/s @256k, but weaker on real work.
+  --smart    Qwen3.8-27B dense (UD-IQ4_XS), entirely in VRAM (qwen-llama-server
+             LLAMA_PROFILE=smart). Stronger than the 35B-A3B (Terminal-Bench 2.1 73.0);
+             ~17 tok/s per agent with two agents. VRAM is nearly full, so the shared KV
+             pool is 64k and each agent is told 32k (LLAMA_CTX/LLAMA_POOL to change).
+             Measured in /mnt/hd/Repos/local-llm-bench (2026-10-13).
 
 OPTIONS
   --resume [ID]  Resume a dsh session; with no ID, picks the newest one for the current dir.
@@ -73,6 +78,7 @@ while [ "$i" -lt "${#args[@]}" ]; do
     -h|--help) usage; exit 0 ;;
     --flash) MODE=flash ;;          # Qwen3.8-Flash-Next 125B (big smarts, slow 1st prompt)
     --nemo) MODE=nemo ;;            # Nemotron 3.5 Lightning 30B-A3B (fast, weaker)
+    --smart) MODE=smart ;;          # Qwen3.8-27B dense, all in VRAM (LLAMA_PROFILE=smart)
     --resume)                       # resume a session; optional id after it
       RESUME=1
       nxt=${args[$((i+1))]:-}
@@ -109,6 +115,10 @@ export LLAMA_PORT="$PORT" DSH_LOCAL_PORT="$PORT"
 # (re)starts its own model and stops it on exit.
 was_up=0
 { [ "$MODE" = "$DEFAULT_MODE" ] && [ -n "${REUSED:-}" ]; } && was_up=1
+# --smart is meant for two agents too: the second `dsh-go --smart` reuses our server when it
+# already serves the smart model, instead of restarting it under the first agent.
+if [ "$MODE" = smart ] && [ -n "${REUSED:-}" ] \
+   && curl -s --max-time 2 "$url/props" 2>/dev/null | grep -q 'Qwen3.8-27B'; then was_up=1; fi
 
 # Reference-count concurrent sessions, so two agents can share one server. Without
 # this, whichever session happened to START the model would reap it on its own exit
@@ -176,7 +186,7 @@ run_ladder() {
 }
 
 # Preflight: if we're about to start a container, make sure docker is reachable.
-need_start=1; { [ "$MODE" = "$DEFAULT_MODE" ] && [ "$was_up" = 1 ]; } && need_start=0
+need_start=1; [ "$was_up" = 1 ] && need_start=0
 if [ "$need_start" = 1 ] && ! docker info >/dev/null 2>&1; then
   echo "✗ docker isn't accessible (permission denied on /var/run/docker.sock)."
   echo "  You're not in the 'docker' group. One-time fix:"
@@ -234,6 +244,26 @@ case "$MODE" in
         -c "$CTX" --jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0 --host 0.0.0.0 --port "$PORT" >/dev/null 2>&1
       ok=0; for i in $(seq 150); do curl -s --max-time 2 "$url/health" 2>/dev/null | grep -q ok && { ok=1; break; }; docker ps -q -f name="^$NAME$" | grep -q . || break; sleep 4; done
       [ "$ok" = 1 ] && printf ' ✓ ready\n' || { echo " — failed to start (docker logs qwen-coder)"; exit 1; }
+    fi
+    ;;
+  smart)
+    # Qwen3.8-27B dense via qwen-llama-server's opt-in LLAMA_PROFILE=smart (model, 2 slots,
+    # card sampling). Weights fill ~13.3 GiB of VRAM, so there is no expert ladder: the only
+    # knob is the KV pool. 64k fits with ~0.6 GB spare; each agent gets half of it.
+    FILE=Qwen3.8-27B-UD-IQ4_XS.gguf
+    [ -f "$HOME/.cache/gguf/$FILE" ] || { echo "missing $FILE in ~/.cache/gguf (unsloth/Qwen3.8-27B-GGUF)"; exit 1; }
+    export LLAMA_PROFILE=smart LLAMA_GGUF_FILE=$FILE
+    unset LLAMA_DRAFT LLAMA_FFN_CPU_FROM LLAMA_NGL LLAMA_OT LLAMA_NCMOE
+    CTX=${LLAMA_CTX:-32768}
+    POOL=${LLAMA_POOL:-65536}
+    if [ "$was_up" = 0 ]; then
+      printf '⟳  Qwen3.8-27B (all in VRAM) — %sk pool for 2 agents @ %sk each…' "$((POOL/1024))" "$((CTX/1024))"
+      if start_model "$POOL"; then printf ' ✓ ready\n'
+      else
+        docker rm -f "$NAME" >/dev/null 2>&1
+        [ "$START_ERR" = vram ] && START_ERR="VRAM too tight for a $((POOL/1024))k pool (try LLAMA_POOL=49152)"
+        echo; echo "could not start Qwen3.8-27B: $START_ERR"; exit 1
+      fi
     fi
     ;;
   nemo)
