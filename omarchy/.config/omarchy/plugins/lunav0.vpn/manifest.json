@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "lunav0.vpn",
+  "name": "VPN",
+  "version": "1.0.0",
+  "author": "lunav0",
+  "description": "NetworkManager VPN state; click to connect or disconnect",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Vpn.qml" },
+  "barWidget": {
+    "displayName": "VPN",
+    "description": "NetworkManager VPN state; click to connect or disconnect",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

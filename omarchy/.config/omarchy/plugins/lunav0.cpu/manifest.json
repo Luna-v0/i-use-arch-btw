@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "lunav0.cpu",
+  "name": "CPU",
+  "version": "1.0.0",
+  "author": "lunav0",
+  "description": "CPU load and temperature, with RAM in the tooltip",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Cpu.qml" },
+  "barWidget": {
+    "displayName": "CPU",
+    "description": "CPU load and temperature, with RAM in the tooltip",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

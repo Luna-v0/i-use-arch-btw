@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "lunav0.livebg",
+  "name": "Live background",
+  "version": "1.0.0",
+  "author": "lunav0",
+  "description": "Slow drifting aurora drawn over the wallpaper, coloured from the active palette",
+  "kinds": ["service"],
+  "entryPoints": { "service": "LiveBackground.qml" }
+}

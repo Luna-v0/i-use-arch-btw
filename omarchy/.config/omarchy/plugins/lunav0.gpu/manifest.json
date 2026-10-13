@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "lunav0.gpu",
+  "name": "GPU",
+  "version": "1.0.0",
+  "author": "lunav0",
+  "description": "NVIDIA GPU load and temperature, with VRAM in the tooltip",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Gpu.qml" },
+  "barWidget": {
+    "displayName": "GPU",
+    "description": "NVIDIA GPU load and temperature, with VRAM in the tooltip",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

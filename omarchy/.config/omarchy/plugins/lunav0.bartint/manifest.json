@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "lunav0.bartint",
+  "name": "Bar tint",
+  "version": "1.0.0",
+  "author": "lunav0",
+  "description": "Drifts bar icon colour through the active palette, matching the live background",
+  "kinds": ["service"],
+  "entryPoints": { "service": "BarTint.qml" }
+}
