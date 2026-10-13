@@ -1,0 +1,316 @@
+#!/bin/bash
+#
+# display-recover: detect and (optionally) recover a Hyprland session where
+# one or more outputs are stuck reporting 0x0 after a DisplayPort/HDMI link
+# drop that Aquamarine's DRM backend never cleanly recovers from.
+#
+# Written after the 2026-10-13 ~17:47 freeze on this machine: an LG Ultrawide
+# DP link retrain (amdgpu LTTPR errors) left both outputs at 0x0, every
+# atomic modeset came back EINVAL, and nothing short of ending the Hyprland
+# session and logging back in brought the displays back. This is a known,
+# widely-reproduced upstream bug (hyprwm/aquamarine#383, #386, #430: a CRTC
+# that isn't released in the kernel when a connector disconnects, so every
+# later atomic TEST_ONLY commit on that CRTC fails). See the incident report
+# this was written for: maintenance/dotfiles/dotfiles/reports/
+# 2026-10-13-monitor-freeze.md.
+#
+# This script is opt-in and does nothing destructive by default:
+#   - with no flags, it detects and, if broken, tries the cheap steps
+#     (a DPMS cycle, then re-applying monitors.lua's monitor rules). It
+#     never ends the session on its own.
+#   - --restart additionally allows it to end the Hyprland session
+#     (systemctl --user stop wayland-wm@hyprland.desktop.service) if the
+#     cheap steps didn't work. This drops the machine back to the SDDM
+#     login screen; logging back in is a separate, manual step at the
+#     physical machine (or via autologin, if that's configured).
+#   - --detect-only skips every mutating step (no DPMS cycle, no monitor
+#     re-apply, no restart) and only reports/notifies. This is what the
+#     optional display-recover-watch timer uses. It alerts ONLY on the
+#     actual bug (an output stuck at 0x0, or a FALLBACK placeholder output
+#     present) -- a simple "fewer outputs than monitors.lua expects" (e.g.
+#     the TV switched off at the power button) is not treated as a problem
+#     here, since that's normal and would otherwise fire every minute. It
+#     also requires the bad state on two *consecutive* checks before
+#     alerting (a transient replug shouldn't page), dedupes via a small
+#     state file in $XDG_RUNTIME_DIR so one incident notifies once (plus
+#     once more on recovery, not every minute), and exits 0 quietly -- no
+#     notification -- when hyprctl can't be reached at all (logged out, at
+#     the SDDM screen), rather than treating "no session" as the bug.
+#   - --dry-run prints every command it would run instead of running it,
+#     and never sends a real notification (prints "would notify" instead).
+#     Detection itself (read-only hyprctl/jq calls) always actually runs,
+#     since reading state is harmless; the --detect-only state file is not
+#     written to under --dry-run either.
+#
+# Safe to run from a phone over SSH:
+#   ssh <this-host> '~/.local/bin/display-recover --dry-run'
+#   ssh <this-host> '~/.local/bin/display-recover'            # cheap steps only
+#   ssh <this-host> '~/.local/bin/display-recover --restart'  # allow ending the session
+#
+# Needs: hyprctl (on the session's bus -- run as the session user, not root),
+# jq. Notifies via the maintenance repo's notify.sh if that's reachable;
+# silently skips notification otherwise (e.g. when run on a machine without
+# that path).
+
+set -euo pipefail
+
+MONITORS_LUA="${MONITORS_LUA:-$HOME/.config/hypr/monitors.lua}"
+NOTIFY_SH="${NOTIFY_SH:-/mnt/hd/Repos/maintenance/_global/scripts/notify.sh}"
+NTFY_TAGS_OK="${NTFY_TAGS_OK:-white_check_mark}"
+NTFY_TAGS_WARN="${NTFY_TAGS_WARN:-warning}"
+# Dedupe/consecutive-check state for --detect-only, so the watch timer (once
+# a minute) notifies once per incident, not once a minute.
+STATE_FILE="${STATE_FILE:-${XDG_RUNTIME_DIR:-/tmp}/display-recover.state}"
+
+dry_run=0
+do_restart=0
+detect_only=0
+
+usage() {
+	cat <<EOF
+usage: display-recover [--dry-run] [--restart] [--detect-only] [-h|--help]
+
+  --dry-run       print the commands that would run instead of running them
+                  (detection reads still run; nothing else does)
+  --restart       if the cheap steps don't recover the outputs, end the
+                  Hyprland session (systemctl --user stop
+                  wayland-wm@hyprland.desktop.service) so it can be logged
+                  back into. Without this flag, display-recover only
+                  reports that a restart would be needed.
+  --detect-only   only detect and notify; never run the DPMS cycle, the
+                  monitor re-apply, or a restart. Alerts only on an output
+                  stuck at 0x0 or a FALLBACK placeholder output, not on a
+                  monitor simply being switched off; requires two
+                  consecutive bad checks and dedupes via a state file in
+                  $XDG_RUNTIME_DIR so one incident notifies once, plus once
+                  on recovery. Exits 0 quietly if hyprctl can't be reached
+                  at all. What the optional display-recover-watch timer
+                  uses.
+  -h, --help      this message
+EOF
+}
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--dry-run) dry_run=1 ;;
+	--restart) do_restart=1 ;;
+	--detect-only) detect_only=1 ;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "display-recover: unknown argument: $1" >&2
+		usage >&2
+		exit 2
+		;;
+	esac
+	shift
+done
+
+log() { echo "display-recover: $*"; }
+
+# Runs a mutating command, or prints it under --dry-run.
+run() {
+	if [ "$dry_run" = 1 ]; then
+		log "[dry-run] would run: $*"
+		return 0
+	fi
+	log "+ $*"
+	"$@"
+}
+
+notify() {
+	local msg="$1" tags="${2:-$NTFY_TAGS_WARN}" prio="${3:-4}"
+	if [ "$dry_run" = 1 ]; then
+		log "[dry-run] would notify: $msg"
+		return 0
+	fi
+	if [ -x "$NOTIFY_SH" ]; then
+		"$NOTIFY_SH" "$msg" "display-recover" "$tags" "$prio" >/dev/null 2>&1 || true
+	else
+		log "(notify.sh not found at $NOTIFY_SH -- not sent: $msg)"
+	fi
+}
+
+need() {
+	command -v "$1" >/dev/null 2>&1 || {
+		log "missing dependency: $1"
+		exit 1
+	}
+}
+need hyprctl
+need jq
+
+# --- detect -----------------------------------------------------------
+monitors_json="$(hyprctl monitors -j 2>/dev/null || true)"
+if [ -z "$monitors_json" ] || ! echo "$monitors_json" | jq -e . >/dev/null 2>&1; then
+	if [ "$detect_only" = 1 ]; then
+		# No session on this bus (logged out, at the SDDM screen, etc.) is
+		# not the bug this watches for -- exit quietly, no notification,
+		# and don't touch the dedupe state (resume correctly next login).
+		log "hyprctl unreachable -- no session on this bus; detect-only, exiting quietly."
+		exit 0
+	fi
+	log "hyprctl monitors -j returned nothing usable -- no session on this bus?"
+	notify "display-recover: can't reach hyprctl -- no session, or run as the session user" "$NTFY_TAGS_WARN" 4
+	exit 1
+fi
+
+stuck="$(echo "$monitors_json" | jq -r '.[] | select((.width == 0) or (.height == 0)) | .name')"
+actual_count="$(echo "$monitors_json" | jq 'length')"
+expected_count=0
+if [ -r "$MONITORS_LUA" ]; then
+	expected_count="$(grep -c 'hl\.monitor(' "$MONITORS_LUA" || true)"
+fi
+fallback_present=0
+if echo "$monitors_json" | jq -e '.[] | select(.name == "FALLBACK")' >/dev/null 2>&1; then
+	fallback_present=1
+fi
+
+if [ "$detect_only" = 1 ]; then
+	# Alert ONLY on the actual bug: an output stuck at 0x0, or the FALLBACK
+	# placeholder output present. A monitor simply being switched off (fewer
+	# outputs than monitors.lua expects) is normal and NOT treated as a
+	# problem here -- that distinction matters because this runs unattended
+	# every minute via the watch timer.
+	bug_now=0
+	detail=""
+	if [ -n "$stuck" ]; then
+		bug_now=1
+		detail="stuck at 0x0: $(echo "$stuck" | paste -sd, -)"
+	fi
+	if [ "$fallback_present" = 1 ]; then
+		bug_now=1
+		detail="${detail:+$detail; }FALLBACK output present"
+	fi
+
+	prev_state="ok"
+	if [ -r "$STATE_FILE" ]; then
+		prev_state="$(awk -F= '/^state=/{print $2}' "$STATE_FILE" 2>/dev/null)"
+		[ -n "$prev_state" ] || prev_state="ok"
+	fi
+
+	new_state="ok"
+	if [ "$bug_now" = 1 ]; then
+		case "$prev_state" in
+		ok)
+			new_state="pending"
+			log "possible issue ($detail) -- confirming on the next check before notifying."
+			;;
+		pending)
+			new_state="bad"
+			log "confirmed on two consecutive checks: $detail"
+			notify "display-recover: $detail" "$NTFY_TAGS_WARN" 4
+			;;
+		bad | *)
+			new_state="bad"
+			log "still ongoing (already notified): $detail"
+			;;
+		esac
+	else
+		case "$prev_state" in
+		bad)
+			new_state="ok"
+			log "recovered."
+			notify "display-recover: recovered, outputs look normal again" "$NTFY_TAGS_OK" 3
+			;;
+		pending | ok | *)
+			new_state="ok"
+			;;
+		esac
+	fi
+
+	if [ "$dry_run" = 1 ]; then
+		log "[dry-run] would write state: $prev_state -> $new_state (not writing $STATE_FILE)"
+	else
+		printf 'state=%s\n' "$new_state" >"$STATE_FILE" 2>/dev/null || log "(couldn't write $STATE_FILE -- dedupe won't persist)"
+	fi
+
+	if [ "$new_state" = "ok" ]; then
+		log "OK (detect-only): $actual_count output(s), none stuck at 0x0, no FALLBACK."
+		exit 0
+	else
+		exit 1
+	fi
+fi
+
+# --- manual mode: same checks as before, plus the cheap recovery steps ---
+problem=0
+reasons=()
+if [ -n "$stuck" ]; then
+	problem=1
+	reasons+=("stuck at 0x0: $(echo "$stuck" | paste -sd, -)")
+fi
+if [ "$expected_count" -gt 0 ] && [ "$actual_count" -lt "$expected_count" ]; then
+	problem=1
+	reasons+=("only $actual_count output(s) present, monitors.lua expects $expected_count")
+fi
+
+if [ "$problem" = 0 ]; then
+	log "OK: $actual_count output(s), none stuck at 0x0."
+	exit 0
+fi
+
+for r in "${reasons[@]}"; do log "PROBLEM: $r"; done
+
+notify "display-recover: ${reasons[0]} -- trying cheap recovery steps" "$NTFY_TAGS_WARN" 4
+
+# --- cheap step 1: DPMS cycle ------------------------------------------
+run hyprctl dispatch dpms off
+run hyprctl dispatch dpms on
+
+if [ "$dry_run" != 1 ]; then
+	sleep 1
+	monitors_json="$(hyprctl monitors -j 2>/dev/null || true)"
+	stuck="$(echo "$monitors_json" | jq -r '.[] | select((.width == 0) or (.height == 0)) | .name' 2>/dev/null || true)"
+	if [ -z "$stuck" ]; then
+		log "recovered after a DPMS cycle."
+		notify "display-recover: recovered after a DPMS cycle" "$NTFY_TAGS_OK" 3
+		exit 0
+	fi
+fi
+
+# --- cheap step 2: re-apply monitors.lua's monitor rules ---------------
+# UW/TV (and any other names monitors.lua defines) are Lua globals in the
+# same running Lua state hyprctl eval executes against, so each
+# hl.monitor({...}) line can be replayed verbatim -- no need to duplicate
+# the EDID descriptions here.
+if [ -r "$MONITORS_LUA" ]; then
+	while IFS= read -r rule; do
+		[ -n "$rule" ] || continue
+		run hyprctl eval "$rule"
+	done < <(grep 'hl\.monitor(' "$MONITORS_LUA" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+	if [ "$dry_run" != 1 ]; then
+		sleep 1
+		monitors_json="$(hyprctl monitors -j 2>/dev/null || true)"
+		stuck="$(echo "$monitors_json" | jq -r '.[] | select((.width == 0) or (.height == 0)) | .name' 2>/dev/null || true)"
+		if [ -z "$stuck" ]; then
+			log "recovered after re-applying monitors.lua's rules."
+			notify "display-recover: recovered after re-applying monitor rules" "$NTFY_TAGS_OK" 3
+			exit 0
+		fi
+	fi
+else
+	log "$MONITORS_LUA not readable -- skipping the re-apply step."
+fi
+
+# --- last resort: end the session --------------------------------------
+# hyprctl dispatch exit and uwsm stop both misbehave under this machine's
+# Lua config and when run outside the session's own environment (e.g. over
+# SSH); stopping the systemd user unit directly is what actually ends it
+# cleanly. This drops to the SDDM login screen -- logging back in is a
+# separate, manual step.
+if [ "$do_restart" = 1 ]; then
+	log "cheap steps did not recover the outputs -- ending the session."
+	notify "display-recover: cheap steps failed, ending the Hyprland session -- log back in" "$NTFY_TAGS_WARN" 5
+	run systemctl --user stop wayland-wm@hyprland.desktop.service
+	exit 0
+else
+	log "cheap steps did not recover the outputs. Re-run with --restart to end" \
+		"the session (systemctl --user stop wayland-wm@hyprland.desktop.service)" \
+		"so it can be logged back into."
+	notify "display-recover: outputs still stuck, cheap steps failed -- needs --restart or you" "$NTFY_TAGS_WARN" 5
+	exit 1
+fi

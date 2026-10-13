@@ -1,0 +1,7 @@
+[Unit]
+Description=Check for a Hyprland output stuck at 0x0 and notify (never restarts)
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/display-recover --detect-only

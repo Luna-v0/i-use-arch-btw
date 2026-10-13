@@ -1,0 +1,11 @@
+[Unit]
+Description=Run display-recover-watch every minute
+
+[Timer]
+OnUnitActiveSec=1min
+OnActiveSec=1min
+AccuracySec=10s
+Persistent=false
+
+[Install]
+WantedBy=timers.target
