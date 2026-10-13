@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "llamacpp/qwen3-coder",
+  "provider": {
+    "llamacpp": {
+      "name": "llama.cpp (qwen-llama-server / dsh-go)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "models": {
+        "qwen3-coder": {
+          "name": "local qwen3-coder alias (whatever qwen-llama-server serves)",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": {
+            "context": 32768,
+            "output": 16384
+          }
+        }
+      }
+    }
+  }
+}
