@@ -17,16 +17,23 @@
 #   LLAMA_DETACH=1 qwen-llama-server   # start detached, return immediately (dsh-go)
 #
 # OPT-IN PROFILES (LLAMA_PROFILE). Unset = everything below behaves exactly as before.
-# A profile only fills in the LLAMA_* knobs you haven't set yourself, and adds its own
-# flags (sampling, slots, batch). Measured 2026-10-13 with /mnt/hd/Repos/local-llm-bench
-# (37-task eval + 2-stream throughput); numbers are from that run.
-#   LLAMA_PROFILE=smart   Qwen3.8-27B dense (unsloth UD-IQ4_XS, 14.3 GB) entirely in VRAM,
-#                         2 slots over a 64k shared KV pool, Qwen card sampling. A stronger
-#                         model than Qwen3.6-35B-A3B (Terminal-Bench 2.1 73.0, SWE-bench Pro
-#                         61.7); ~17 tok/s per agent with 2 agents, prompt ~770 tok/s.
-#   LLAMA_PROFILE=q36     Today's Qwen3.6-35B-A3B Q4_K_M with fixed settings: Qwen card
-#                         "precise coding" sampling, exactly 2 slots over a 256k pool, more
-#                         expert layers back on the GPU, bigger prompt micro-batch.
+# A profile only fills in the LLAMA_* knobs you haven't set yourself and adds its own flags.
+# Measured 2026-10-13 with /mnt/hd/Repos/local-llm-bench (eval + throughput, 2-4 streams).
+#   LLAMA_PROFILE=q36     Recommended. Today's Qwen3.6-35B-A3B Q4_K_M, today's 512k pool
+#                         (2 agents x 256k, 4 slots, q8_0 KV, same sampling), plus 4 CPU
+#                         threads (LLAMA_THREADS), -ub 1024 and n-cpu-moe 28 (26 doesn't fit).
+#                         Low load: prompt 840 tok/s (as-is 441), decode 45 single / 34 each
+#                         with 2 agents / 22.6 each with 4; 120k-deep prompt 688 tok/s.
+#                         With the CPU busy (load ~20) 8 threads decoded at 2.6 tok/s, 4 at 24.
+#                         ~15.3 GB VRAM: no room for a second model.
+#   LLAMA_PROFILE=q36share  Same model, 256k pool, n-cpu-moe 34, -ub 512, 4 threads: 8.6 GB
+#                         VRAM, leaving ~7.7 GB for a second model (the 5.1 GB Ollama FIM model
+#                         fits). Prompt 428 tok/s, decode 42.5 single / 31 each with 2 / 19.7 x4.
+#   LLAMA_PROFILE=smart   Qwen3.8-27B dense (unsloth UD-IQ4_XS) entirely in VRAM, 2 slots over
+#                         a 64k pool (128k does not load, even with q4_0 KV), card sampling.
+#                         Same eval score as the 35B (18/20) with half the thinking tokens, but
+#                         15.9 GB VRAM, 64k total context, ~17 tok/s per agent. Single hard
+#                         problems only; not for long-context or multi-model use.
 set -uo pipefail
 PROFILE_ARGS=()
 case "${LLAMA_PROFILE:-}" in
@@ -35,9 +42,12 @@ case "${LLAMA_PROFILE:-}" in
     : "${LLAMA_GGUF_FILE:=Qwen3.8-27B-UD-IQ4_XS.gguf}" "${LLAMA_CTX:=65536}" "${LLAMA_DENSE:=1}"
     PROFILE_ARGS=(-np 2 -ub 512 --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0) ;;
   q36)
-    : "${LLAMA_GGUF_FILE:=Qwen3.6-35B-A3B-Q4_K_M.gguf}" "${LLAMA_CTX:=262144}" "${LLAMA_NCMOE:=22}"
-    PROFILE_ARGS=(-np 2 -ub 1024 -b 2048 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --presence-penalty 0) ;;
-  *) echo "unknown LLAMA_PROFILE='$LLAMA_PROFILE' (use smart or q36, or unset it)"; exit 1 ;;
+    : "${LLAMA_GGUF_FILE:=Qwen3.6-35B-A3B-Q4_K_M.gguf}" "${LLAMA_CTX:=524288}" "${LLAMA_NCMOE:=28}"
+    PROFILE_ARGS=(-ub 1024 -b 2048 -t "${LLAMA_THREADS:-4}") ;;
+  q36share)
+    : "${LLAMA_GGUF_FILE:=Qwen3.6-35B-A3B-Q4_K_M.gguf}" "${LLAMA_CTX:=262144}" "${LLAMA_NCMOE:=34}"
+    PROFILE_ARGS=(-ub 512 -b 2048 -t "${LLAMA_THREADS:-4}") ;;
+  *) echo "unknown LLAMA_PROFILE='$LLAMA_PROFILE' (use q36, q36share or smart, or unset it)"; exit 1 ;;
 esac
 IMG="${LLAMA_IMG:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
 GGUF_DIR="${LLAMA_GGUF_DIR:-$HOME/.cache/gguf}"

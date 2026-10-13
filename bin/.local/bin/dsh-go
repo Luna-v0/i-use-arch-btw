@@ -24,10 +24,12 @@ MODELS  (same port + alias in every mode, so dsh needs no reconfig)
              page from RAM/SSD, so the FIRST prompt is slow. Default ctx 32k.
   --nemo     Nemotron 3.5 Lightning 30B-A3B — ~62 tok/s @256k, but weaker on real work.
   --smart    Qwen3.8-27B dense (UD-IQ4_XS), entirely in VRAM (qwen-llama-server
-             LLAMA_PROFILE=smart). Stronger than the 35B-A3B (Terminal-Bench 2.1 73.0);
-             ~17 tok/s per agent with two agents. VRAM is nearly full, so the shared KV
-             pool is 64k and each agent is told 32k (LLAMA_CTX/LLAMA_POOL to change).
+             LLAMA_PROFILE=smart). Same score as the 35B on the local eval with half the
+             thinking, ~17 tok/s per agent, but VRAM is full (15.9 GB): 64k shared pool,
+             each agent told 32k, no room for a second model. For hard, short problems.
              Measured in /mnt/hd/Repos/local-llm-bench (2026-10-13).
+  LLAMA_PROFILE=q36 dsh-go   Default model, same 2x256k context, but 4 CPU threads and a
+             bigger prompt batch: ~2x prompt speed, and no collapse when the CPU is busy.
 
 OPTIONS
   --resume [ID]  Resume a dsh session; with no ID, picks the newest one for the current dir.
