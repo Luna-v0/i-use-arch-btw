@@ -24,3 +24,7 @@ __pycache__/
 
 # Claude Code session state for this repo
 .claude/
+
+# tmux plugins are cloned and updated by TPM (prefix+I / prefix+U); only tpm is a submodule
+tmux/.config/tmux/plugins/*
+!tmux/.config/tmux/plugins/tpm
