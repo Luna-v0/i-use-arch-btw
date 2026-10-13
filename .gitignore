@@ -12,6 +12,12 @@ omarchy/.config/omarchy/current/
 *.bak.*
 *.tui-migration.bak
 
+# Dynamic wallpaper theme — palette + wallpaper are regenerated each boot
+omarchy/.config/omarchy/themes/dynamic/colors.toml
+omarchy/.config/omarchy/themes/dynamic/backgrounds/*
+!omarchy/.config/omarchy/themes/dynamic/backgrounds/.gitkeep
+omarchy/.config/omarchy/backgrounds/
+
 # Python bytecode
 __pycache__/
 *.pyc

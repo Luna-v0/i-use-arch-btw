@@ -1,1 +1,1 @@
-/home/lunav0/.config/omarchy/current/theme/neovim.lua
+/home/lunav0/.local/state/omarchy/current/theme/neovim.lua

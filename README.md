@@ -26,7 +26,7 @@ These files contain hardware-specific configurations and **need to be adjusted p
 
 | File | Purpose |
 |------|---------|
-| `hypr/.config/hypr/monitors.conf` | Monitor layout, resolution, and scaling |
+| `hypr/.config/hypr/monitors.lua` | Monitor layout, resolution, and scaling |
 
 ## 📦 Installation
 
