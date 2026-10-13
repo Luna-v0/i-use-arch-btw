@@ -48,7 +48,7 @@ uv pip install --python "$HOME/.local/xonsh-env/bin/python" \
     'xonsh[full]' \
     xontrib-zoxide xontrib-fish-completer xontrib-abbrevs xontrib-back2dir \
     xontrib-cmd-durations xontrib-vox \
-    pandas rich      # data/scratch packages importable at the xonsh prompt
+    pandas scipy openpyxl rich      # data/scratch packages importable at the xonsh prompt
 # NOTE: a venv is NOT relocatable — build it directly at the final path
 # (its scripts hardcode an absolute python shebang); don't `mv` it afterward.
 # xonsh's REPL runs on THIS env, so `import pandas` resolves here, not in any
@@ -73,14 +73,21 @@ abbreviations (`gst`, `gco`, `gp`, `gl`), aliases (`ll`, `la`, `mkcd`), the
 
 ### Helper scripts (auto-loaded)
 
-- `jlab.xsh` — `jlab` / `jlab-ls` / `jlab-stop` / `jlab-reset` per-project Jupyter + Claude MCP.
-  Installs a **core** Jupyter stack (works on Python 3.8+); the collaboration + MCP
-  bridge needs Python ≥3.10 and is **auto-skipped** on older projects (or via
-  `jlab --no-mcp`), so Lab still launches.
+- `jlab.xsh` — `jlab` / `jlab-ls` / `jlab-stop` / `jlab-reset` / `jlab-clean` per-project
+  Jupyter + Claude MCP. Installs a **core** Jupyter stack (works on Python 3.8+); the
+  collaboration + MCP bridge needs Python ≥3.10 and is **auto-skipped** on older
+  projects (or via `jlab --no-mcp`), so Lab still launches. `jlab --help` lists the
+  flags; unknown flags pass through to `jupyter lab`, e.g. `jlab --ip <tailscale-ip>`
+  to serve over Tailscale.
+  Real-time collaboration means Lab serves a CRDT room, not the file, so a document
+  edited on disk while a room is live can render stale or empty. `--squash SECS`
+  (default 1 day) keeps `.jupyter_ystore.db` from growing without bound, `jlab-clean`
+  drops the store so every document is re-read from disk, and `--no-rtc` turns the
+  layer off entirely (which also disables the MCP bridge's notebook editing).
 - `lsl.xsh` — `lsl()` returns a directory's entries as a proper Python list
   (robust replacement for `list($(ls))`, which yields characters). `lsl(df=True)`
   returns a pandas DataFrame (`name`/`type`/`size`/`modified`) for sorting/filtering.
-- `xpip.xsh` — `xpip` / `xpy` target the xonsh env itself, so `xpip install pandas`
+- `xpip.xsh` — `xpip` / `xpy` target the xonsh env itself, so `xpip install scipy`
   makes a package importable at the prompt (the REPL runs on `~/.local/xonsh-env`).
 - `show.xsh` — `show(df)` renders a pandas DataFrame as a colored rich table
   (dir/file aware). Pairs with lsl: `show(lsl(df=True))`. Needs `rich` + `pandas`.
