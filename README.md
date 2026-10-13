@@ -1,24 +1,32 @@
 # 🏠 Omarchy Dotfiles
 
-Personal dotfiles for an Arch Linux setup running **Hyprland** as the Wayland compositor.
+Personal dotfiles for an Arch Linux setup running **Omarchy 4 ("Quattro")** with **Hyprland 0.56** (Lua config).
 
 ## 🛠️ Tools & Configurations
 
+Stow packages (each mirrors its path under `~`):
+
 | Directory | Description |
 |-----------|-------------|
-| `hypr/` | Hyprland compositor, Hyprlock, Hypridle, Hyprsunset |
-| `nvim/` | Neovim with LazyVim |
-| `tmux/` | Tmux with TPM plugins (resurrect, continuum, yank) |
+| `hypr/` | Hyprland Lua config: `hyprland.lua` loads Omarchy's defaults, then `monitors`, `input`, `bindings`, `looknfeel`, `autostart`, `gpu`, `webapps`; also Hyprsunset |
+| `omarchy/` | Omarchy 4: `shell.json` (omarchy-shell bar), `plugins/lunav0.*` shell plugins, hooks, themed templates, themes (`dynamic`, `osaka-jade-custom`) |
+| `nvim/` | Neovim with LazyVim (typst, auto-save, OSC52 clipboard over SSH) |
+| `tmux/` | Tmux with TPM. Only `tpm` is a submodule; install the plugins with `prefix + I` |
 | `xonsh/` | xonsh interactive shell (runs inside tmux panes — see `xonsh/README.md`) |
 | `ghostty/` | Ghostty terminal emulator |
-| `waybar/` | Waybar status bar |
-| `walker/` | Walker application launcher |
-| `mako/` | Mako notification daemon |
 | `starship.toml/` | Starship shell prompt |
-| `swayosd/` | SwayOSD on-screen display |
-| `omarchy/` | Omarchy themes & branding |
+| `bin/` | `~/.local/bin` scripts: dynamic theme and wallpaper, GPU switching, local LLM helpers, sysmon |
+| `systemd/` | User systemd services and their enablement links |
+| `opencode/` | opencode with a local Ollama provider |
+| `antigravity/` | `local-subagent` plugin under `~/.gemini/config/plugins` |
+
+Not stow packages:
+
+| Directory | Description |
+|-----------|-------------|
+| `quattro/` | Omarchy 3 → 4 migration kit. `quattro/legacy/` keeps the retired waybar, walker, mako, swayosd, hyprlock and hypridle configs |
+| `ollama/` | Modelfile for `ollama create` |
 | `scripts/` | Custom Python scripts (e.g., `hyprtui.py` for Hyprland TUI) |
-| `systemd/` | User systemd services |
 
 ## ⚠️ Machine-Specific Files
 
@@ -27,13 +35,14 @@ These files contain hardware-specific configurations and **need to be adjusted p
 | File | Purpose |
 |------|---------|
 | `hypr/.config/hypr/monitors.lua` | Monitor layout, resolution, and scaling |
+| `hypr/.config/hypr/gpu.lua` | VA-API/GLX routing for an AMD iGPU + NVIDIA dGPU |
 
 ## 📦 Installation
 
 This repo uses [Omadot](https://github.com/tomhayes/omadot) for symlink management. From the dotfiles directory:
 
 ```bash
-omadot put --all        # symlink every package into ~
+omadot put --all --exclude=quattro,ollama,scripts   # symlink every package into ~
 omadot put xonsh         # …or a single package
 omadot list             # list available packages
 ```
