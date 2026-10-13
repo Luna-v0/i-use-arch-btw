@@ -130,10 +130,15 @@ trap cleanup EXIT
 # ── context window: ask the server rather than guess ────────────────────────
 # Advertising more than the server serves causes overflow errors; advertising less
 # wastes the window and triggers early compaction. /props knows the truth.
+# /props also says whether the chat template honours `reasoning_effort` (Qwen3.8 does:
+# low/medium/xhigh; Qwen3.6 and Nemotron don't). Only then is the model declared
+# `reasoning: true`, so pi's --thinking level (pi-go -p defaults to low) actually reaches
+# the server. For templates without it nothing changes: pi clamps thinking to off and
+# sends no reasoning field, exactly as before.
+PROPS=$(curl -s --max-time 3 "${BASE%/v1}/props" 2>/dev/null)
 CTX=${PI_GO_CTX:-}
 if [ -z "$CTX" ]; then
-  CTX=$(curl -s --max-time 3 "${BASE%/v1}/props" 2>/dev/null \
-        | python3 -c 'import sys,json
+  CTX=$(printf '%s' "$PROPS" | python3 -c 'import sys,json
 try:
     d=json.load(sys.stdin)
     g=d.get("default_generation_settings") or {}
@@ -141,13 +146,16 @@ try:
 except Exception: print(0)' 2>/dev/null)
 fi
 [ -n "$CTX" ] && [ "$CTX" -gt 0 ] 2>/dev/null || CTX=32768
+EFFORT=$(printf '%s' "$PROPS" | python3 -c 'import sys,json
+try: print(1 if (json.load(sys.stdin).get("chat_template_caps") or {}).get("supports_reasoning_effort") else 0)
+except Exception: print(0)' 2>/dev/null)
 
 # ── generate the throwaway pi config ────────────────────────────────────────
 CFG="${XDG_RUNTIME_DIR:-/tmp}/pi-go"
 mkdir -p "$CFG" 2>/dev/null
-python3 - "$CFG" "$BASE" "$CTX" "$ALIAS" <<'PY'
+python3 - "$CFG" "$BASE" "$CTX" "$ALIAS" "${EFFORT:-0}" <<'PY'
 import json,os,sys
-cfg,base,ctx,alias = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+cfg,base,ctx,alias,effort = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5] == "1"
 # PI_CODING_AGENT_DIR expects the json files FLAT in the directory (not under agent/).
 src = os.path.expanduser("~/.pi/agent")
 models = {"providers": {}}
@@ -163,7 +171,12 @@ models.setdefault("providers", {})
 local = models["providers"].get("local", {})
 local.update({"api": "openai-completions", "apiKey": local.get("apiKey", "local"), "baseUrl": base})
 ms = [m for m in local.get("models", []) if m.get("id") != alias]
-ms.insert(0, {"id": alias, "contextWindow": ctx, "input": ["text"], "reasoning": False, "_launch": True})
+entry = {"id": alias, "contextWindow": ctx, "input": ["text"], "reasoning": False, "_launch": True}
+if effort:   # template takes reasoning_effort low|medium|xhigh (Qwen3.8, default xhigh). pi's own default
+            # level is medium -> keep the model's default (xhigh); -p's "low" -> the template's brief mode.
+    entry.update({"reasoning": True, "thinkingLevelMap": {"off": None, "minimal": "low", "low": "low",
+                  "medium": "xhigh", "high": "xhigh", "xhigh": "xhigh", "max": None}})
+ms.insert(0, entry)
 local["models"] = ms
 models["providers"]["local"] = local
 settings.update({"defaultProvider": "local", "defaultModel": alias})
