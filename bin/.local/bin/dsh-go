@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# dsh-go: start the local coding model, open the dsh TUI, and shut the model down
+# when you leave the TUI.
+#
+# Run `dsh-go --help` for the modes, flags and env knobs. usage() below is the single
+# source of truth, so the model list is deliberately NOT restated here (it drifts).
+set -uo pipefail
+NAME=qwen-coder; ALIAS=qwen3-coder
+FLASH_IMG=ghcr.io/ggml-org/llama.cpp:server-cuda
+
+# --help must be handled here, before the EXIT trap below is installed, so asking for
+# help never triggers the "stop the model" cleanup.
+usage() {
+  cat <<'HELP'
+dsh-go — start the local coding model, open the dsh TUI, stop the model on exit.
+
+USAGE
+  dsh-go [--flash|--nemo] [--resume [ID]] [profile] [other dsh flags...]
+
+MODELS  (same port + alias in every mode, so dsh needs no reconfig)
+  (default)  Qwen3.6-35B-A3B Q4_K_M — SWE-bench 73.4 coding flagship. 3B active, experts
+             park in RAM. ~45 tok/s @32k, 40 @128k, 34.5 @256k. Fits 16GB. Default ctx 256k.
+  --flash    Qwen3.8-Flash-Next 125B-A6B (IQ4_XS) — biggest smarts, ~19 tok/s warm; experts
+             page from RAM/SSD, so the FIRST prompt is slow. Default ctx 32k.
+  --nemo     Nemotron 3.5 Lightning 30B-A3B — ~62 tok/s @256k, but weaker on real work.
+
+OPTIONS
+  --resume [ID]  Resume a dsh session; with no ID, picks the newest one for the current dir.
+  -h, --help     Show this help and exit.
+  <profile>      A bare word is the dsh profile (default: tui).
+  Any other --flag is passed straight through to dsh.
+
+TWO AGENTS
+  The server keeps ONE shared KV pool (--kv-unified), so two dsh sessions can run at
+  once against it. By default the pool is 2x the per-agent window: 512k of pool for
+  two 256k agents, both resident in VRAM, resuming each other for ~free (measured:
+  30 tokens / 0.35s to resume a 41k conversation after the other one ran).
+  Just launch `dsh-go` twice; sessions are reference-counted so the model is only
+  stopped when the LAST one exits.
+
+ENVIRONMENT
+  LLAMA_CTX=N    Window ONE agent may use (default 262144, the model's trained max).
+                 This is what dsh is told via DSH_LOCAL_CTX. Smaller = faster.
+                   LLAMA_CTX=32768 dsh-go      # peak speed (~45 tok/s)
+  LLAMA_POOL=N   Total server KV pool (default: LLAMA_CTX x 2). Raise for more
+                 simultaneous agents, lower to save VRAM. Driving VRAM is the POOL,
+                 not LLAMA_CTX.
+  LLAMA_PORT=N   Serve on this port instead of auto-picking. By default dsh-go reuses a
+                 port its own server is already on, else the first free of 8080-8084,
+                 and tells dsh via DSH_LOCAL_PORT.
+  LLAMA_NCMOE=N  Expert-offload override: how many layers keep their MoE experts in RAM.
+                 Lower = more on GPU = faster, but fails to load if too low. Auto-laddered
+                 by POOL if unset (512k pool needs >=26; 32 is the default for headroom).
+  LLAMA_CACHE_RAM=N   Host-RAM prompt cache in MiB (default 32768; upstream default is
+                 only 8192). This is what parks an idle agent's context in RAM when the
+                 pool overflows. NOT reclaimable, so don't starve the page cache that
+                 holds the offloaded experts.
+  LLAMA_CTX_CHECKPOINTS=N  Context checkpoints per slot (default 64). This model is
+                 hybrid, and checkpoints are the only way it can roll back to a prefix.
+
+NOTES
+  Plain `dsh-go` reuses a model server that is already running; an explicit mode flag
+  always (re)starts its own model. On exit the model is stopped only if this session
+  started it AND no other dsh-go session is still attached to that port.
+HELP
+}
+
+MODE=q35; PROFILE=tui; RESUME=0; RESUME_ID=""; APP_ARGS=()
+args=("$@"); i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  a=${args[$i]}
+  case "$a" in
+    -h|--help) usage; exit 0 ;;
+    --flash) MODE=flash ;;          # Qwen3.8-Flash-Next 125B (big smarts, slow 1st prompt)
+    --nemo) MODE=nemo ;;            # Nemotron 3.5 Lightning 30B-A3B (fast, weaker)
+    --resume)                       # resume a session; optional id after it
+      RESUME=1
+      nxt=${args[$((i+1))]:-}
+      if [ -n "$nxt" ] && [ "${nxt#-}" = "$nxt" ]; then RESUME_ID=$nxt; i=$((i+1)); fi
+      ;;
+    --*)   APP_ARGS+=("$a") ;;      # any other launcher/app flag: pass through
+    *)     PROFILE="$a" ;;          # bare word = dsh profile (default tui)
+  esac
+  i=$((i+1))
+done
+
+DEFAULT_MODE=q35
+
+# Port choice. :8080 is the default, but anything else on the box may own it (a
+# docker-compose work stack, say) — and with the port hardcoded dsh-go just died
+# with a misleading "too tight, more experts -> CPU" (a VRAM diagnosis for what was
+# really "port is already allocated"). So: reuse a port where OUR server is already
+# serving, else take the first free one. dsh is told the choice through
+# DSH_LOCAL_PORT, which cordis.patch.yml reads (same trick as DSH_LOCAL_CTX).
+PORTS=${LLAMA_PORT:-"8080 8081 8082 8083 8084"}
+# Identify our own server by the model alias: a foreign app can answer /health too,
+# and pointing dsh at someone else's service would be worse than failing.
+is_ours()   { curl -s --max-time 2 "http://localhost:$1/v1/models" 2>/dev/null | grep -q "$ALIAS"; }
+port_free() { ! ss -tln 2>/dev/null | awk 'NR>1{print $4}' | grep -qE "[:.]$1\$"; }
+PORT=""
+for p in $PORTS; do is_ours   "$p" && { PORT=$p; REUSED=1; break; }; done
+[ -n "$PORT" ] || for p in $PORTS; do port_free "$p" && { PORT=$p; break; }; done
+[ -n "$PORT" ] || { echo "no free port among: $PORTS  (pick one with LLAMA_PORT=N)"; exit 1; }
+url=http://localhost:$PORT
+export LLAMA_PORT="$PORT" DSH_LOCAL_PORT="$PORT"
+[ "$PORT" = 8080 ] || printf 'ℹ  :8080 is taken — serving on :%s (dsh follows via DSH_LOCAL_PORT)\n' "$PORT"
+
+# The default mode reuses a server that's already up; an explicit mode flag always
+# (re)starts its own model and stops it on exit.
+was_up=0
+{ [ "$MODE" = "$DEFAULT_MODE" ] && [ -n "${REUSED:-}" ]; } && was_up=1
+
+# Reference-count concurrent sessions, so two agents can share one server. Without
+# this, whichever session happened to START the model would reap it on its own exit
+# and kill the model underneath any other session still using it. Last one out
+# turns off the lights. Markers are <port>.<pid>; dead ones are pruned on start.
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/dsh-go"
+mkdir -p "$RUNDIR" 2>/dev/null
+for m in "$RUNDIR"/*.*; do
+  [ -e "$m" ] || continue
+  kill -0 "${m##*.}" 2>/dev/null || rm -f "$m"
+done
+MARKER="$RUNDIR/$PORT.$$"; : > "$MARKER"
+cleanup() {
+  rm -f "$MARKER" 2>/dev/null
+  if ls "$RUNDIR/$PORT."* >/dev/null 2>&1; then
+    printf '\n⏻  leaving model up — another dsh-go session is still attached\n'; return
+  fi
+  [ "$was_up" = 0 ] && { printf '\n⏻  stopping model…\n'; docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+}
+trap cleanup EXIT
+
+free_vram() { nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1; }
+
+# start_model <ctx>: start qwen-llama-server detached at ctx, wait for health. 0=ok.
+# On failure sets START_ERR: "vram" means retrying with more offload may help; anything
+# else is the real error (port taken, missing file, CUDA init) where the ladder is futile.
+START_ERR=""
+start_model() {
+  export LLAMA_CTX="$1"; START_ERR=""
+  if ! LLAMA_DETACH=1 LLAMA_NAME="$NAME" qwen-llama-server >/tmp/qwen-coder.log 2>&1; then
+    START_ERR=$(grep -m1 -ioE '(port is already allocated|permission denied|no such file[^"]*|[Ee]rror response from daemon: [^"]*)' /tmp/qwen-coder.log)
+    START_ERR=${START_ERR:-"could not launch container (see /tmp/qwen-coder.log)"}
+    return 1
+  fi
+  for i in $(seq 90); do
+    curl -s --max-time 2 "$url/health" 2>/dev/null | grep -q ok && return 0
+    if ! docker ps -q -f name="^$NAME$" | grep -q .; then
+      if docker logs "$NAME" 2>&1 | grep -qiE 'out of memory|cudaMalloc failed|failed to fit'; then
+        START_ERR=vram
+      else
+        START_ERR=$(docker logs "$NAME" 2>&1 | grep -iE ' E |error' | tail -1)
+        START_ERR=${START_ERR:-"model exited early (docker logs $NAME)"}
+      fi
+      return 1
+    fi
+    sleep 2
+  done
+  START_ERR="timed out waiting for /health"
+  return 1
+}
+
+# run_ladder <ctx> <ncmoe steps...>: walk the expert-offload ladder, but bail out
+# immediately on a non-VRAM failure rather than blaming VRAM four times over.
+run_ladder() {
+  local ctx=$1; shift; local nc
+  for nc in "$@"; do
+    export LLAMA_NCMOE=$nc; printf '   n-cpu-moe=%s' "$nc"
+    if start_model "$ctx"; then printf ' ✓ ready\n'; return 0; fi
+    docker rm -f "$NAME" >/dev/null 2>&1
+    if [ "$START_ERR" = vram ]; then printf ' — too tight, more experts → CPU\n'
+    else printf ' ✗ %s\n' "$START_ERR"; return 1; fi
+  done
+  START_ERR="VRAM too tight at $((ctx/1024))k even at max offload"
+  return 1
+}
+
+# Preflight: if we're about to start a container, make sure docker is reachable.
+need_start=1; { [ "$MODE" = "$DEFAULT_MODE" ] && [ "$was_up" = 1 ]; } && need_start=0
+if [ "$need_start" = 1 ] && ! docker info >/dev/null 2>&1; then
+  echo "✗ docker isn't accessible (permission denied on /var/run/docker.sock)."
+  echo "  You're not in the 'docker' group. One-time fix:"
+  echo "    sudo usermod -aG docker $USER"
+  echo "    newgrp docker      # applies now in this shell; re-login for all panes"
+  exit 1
+fi
+
+case "$MODE" in
+  q35)
+    # Qwen3.6-35B-A3B Q4_K_M (SWE-bench 73.4). A3B MoE: 3B active/token -> fast; experts
+    # park in RAM via --n-cpu-moe (attention + some experts stay on GPU, fused GDN kernel ON).
+    # Measured plateau ~44-45 tok/s @32-128k, 34.5 @256k. Offload sized by context (bigger KV
+    # at 256k needs more experts on CPU). Default 256k; LLAMA_CTX=32768 dsh-go for peak speed.
+    FILE=Qwen3.6-35B-A3B-Q4_K_M.gguf
+    [ -f "$HOME/.cache/gguf/$FILE" ] || { echo "missing $FILE in ~/.cache/gguf (ggml-org/Qwen3.6-35B-A3B-GGUF)"; exit 1; }
+    export LLAMA_GGUF_FILE=$FILE
+    unset LLAMA_DRAFT LLAMA_DENSE LLAMA_FFN_CPU_FROM LLAMA_NGL LLAMA_OT   # plain MoE offload
+    # CTX  = the window ONE agent may use, advertised to dsh via DSH_LOCAL_CTX.
+    # POOL = the server's total KV pool (-c), shared by all slots under --kv-unified.
+    # These must differ to run TWO agents: a 512k pool holds 2x256k, but each agent
+    # must still be told 256k or it would try to use the whole pool and starve the
+    # other (and exceed the model's trained 262144 context).
+    CTX=${LLAMA_CTX:-262144}
+    POOL=${LLAMA_POOL:-$((CTX*2))}
+    if [ "$was_up" = 0 ]; then
+      # n-cpu-moe ladder, picked by POOL (the pool drives VRAM, not the per-agent window).
+      # Measured @512k pool: 24 OOMs; 32 fits at 12,950MiB/3,430 free (~same VRAM as a
+      # 256k pool at ncmoe=24) ~20 tok/s; 28 -> 14,678/1,702 ~22; 26 -> 15,542/838 (tight).
+      # Start at 32 for headroom: concurrent slots allocate extra compute buffers.
+      if   [ "$POOL" -le 131072 ]; then ladder="18 20 24 26"
+      elif [ "$POOL" -le 262144 ]; then ladder="24 26 28 32"
+      else                              ladder="32 30 28"; fi
+      printf '⟳  Qwen3.6-35B-A3B — %sk pool for 2 agents @ %sk each (~20-25 tok/s)…\n' \
+        "$((POOL/1024))" "$((CTX/1024))"
+      run_ladder "$POOL" $ladder || { echo "could not start 35B: $START_ERR"; exit 1; }
+    fi
+    ;;
+  flash)
+    # Qwen3.8-Flash-Next 125B-A6B MoE (IQ4_XS, 28 shards). --n-cpu-moe + mmap: experts page
+    # from RAM/SSD, only ~6B active/token -> ~19 tok/s warm despite ~85GB on disk. Stock image
+    # (qwen3-next arch; -fit off required). Point -m at shard 1; siblings auto-load from the dir.
+    # ncmoe=42 keeps 6 expert layers on GPU (fastest measured). First prompt is slow (pages in).
+    FLASH_DIR=/mnt/models/flash-next   # on the faster, unencrypted WD SN770 (shorter paging stutters)
+    SHARD1=Qwen3.8-Flash-Next-AD-3.84bpw-IQ4_XS-M64-00001-of-00028.gguf
+    [ -f "$FLASH_DIR/$SHARD1" ] || { echo "missing $FLASH_DIR/$SHARD1 (28-shard Flash-Next IQ4_XS)"; exit 1; }
+    CTX=${LLAMA_CTX:-32768}
+    if [ "$was_up" = 0 ]; then
+      printf '⟳  Qwen3.8-Flash-Next 125B-A6B @ %sk — n-cpu-moe %s, pages RAM/SSD (~19 tok/s warm; 1st prompt slow)…' \
+        "$((CTX/1024))" "${LLAMA_NCMOE:-42}"
+      docker rm -f "$NAME" >/dev/null 2>&1; sleep 3
+      docker run -d --name "$NAME" --gpus all --device /dev/nvidia-uvm --device /dev/nvidia-uvm-tools \
+        -v "$FLASH_DIR":/flash:ro -p "$PORT:$PORT" "$FLASH_IMG" \
+        -m "/flash/$SHARD1" -a qwen3-coder -ngl 99 --n-cpu-moe "${LLAMA_NCMOE:-42}" -fit off -ub 2048 -t "$(nproc)" \
+        -c "$CTX" --jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0 --host 0.0.0.0 --port "$PORT" >/dev/null 2>&1
+      ok=0; for i in $(seq 150); do curl -s --max-time 2 "$url/health" 2>/dev/null | grep -q ok && { ok=1; break; }; docker ps -q -f name="^$NAME$" | grep -q . || break; sleep 4; done
+      [ "$ok" = 1 ] && printf ' ✓ ready\n' || { echo " — failed to start (docker logs qwen-coder)"; exit 1; }
+    fi
+    ;;
+  nemo)
+    # NVIDIA Nemotron 3.5 Lightning 30B-A3B — fast + huge context, but weaker on real work.
+    # Hybrid SSM+attention -> cheap KV; ncmoe=12 leaves ~1.8GB at 256k (~62 tok/s).
+    FILE=NVIDIA-Nemotron-3.5-Lightning-30B-A3B-fit16gib.gguf
+    [ -f "$HOME/.cache/gguf/$FILE" ] || { echo "missing $FILE in ~/.cache/gguf"; exit 1; }
+    export LLAMA_GGUF_FILE=$FILE
+    CTX=${LLAMA_CTX:-262144}
+    if [ "$was_up" = 0 ]; then
+      free=$(free_vram); free=${free:-0}
+      printf '⟳  Nemotron 3.5 Lightning @ %sk — %s MiB VRAM free, sizing expert offload…\n' \
+        "$((CTX/1024))" "$free"
+      run_ladder "$CTX" 12 14 16 24 || { echo "could not start Nemotron: $START_ERR"; exit 1; }
+    fi
+    ;;
+esac
+
+# Tell dsh the real served context so it advertises the right window (see cordis.patch.yml).
+export DSH_LOCAL_CTX="${CTX:-32768}"
+
+# Resume handling: with no id, auto-pick the newest session for the current dir.
+if [ "$RESUME" = 1 ] && [ -z "$RESUME_ID" ]; then
+  key="--$(pwd | sed 's:^/::; s:/:-:g')--"
+  latest=$(ls -1dt "$HOME/.dsh/sessions/$key"/main-session-* 2>/dev/null | head -1)
+  if [ -n "$latest" ]; then RESUME_ID=$(basename "$latest"); printf '↩  resuming %s\n' "$RESUME_ID"
+  else echo "↩  no prior session for $(pwd) — starting fresh"; RESUME=0; fi
+fi
+[ "$RESUME" = 1 ] && [ -n "$RESUME_ID" ] && APP_ARGS+=(--resume "$RESUME_ID")
+
+dsh --profile "$PROFILE" ${APP_ARGS[@]+"${APP_ARGS[@]}"}

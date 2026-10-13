@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Toggle a "breathing" window border (pulsing opacity) vs the default rotating
+# gradient. Run once to start breathing; run again to stop and restore rotation.
+# For A/B testing the two border effects with a single keybind.
+#
+# Hyprland 0.56 (Omarchy 4) parses its config in Lua and rejects `hyprctl
+# keyword` outright with "keyword can't work with non-legacy parsers", so the
+# runtime overrides go through `hyprctl eval` + hl.config() there. The legacy
+# keyword path is kept for Omarchy 3 / pre-0.56 sessions.
+set -uo pipefail
+PIDF="${XDG_RUNTIME_DIR:-/tmp}/border-breathe.pid"
+
+if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF" 2>/dev/null)" 2>/dev/null; then
+  kill "$(cat "$PIDF")" 2>/dev/null   # daemon's TERM trap restores rotation
+  rm -f "$PIDF"
+  exit 0
+fi
+
+(
+  # Omarchy 4 moved generated theme state to ~/.local/state; Omarchy 3 used ~/.config.
+  for candidate in "$HOME/.local/state/omarchy/current/theme/colors.toml" \
+                   "$HOME/.config/omarchy/current/theme/colors.toml"; do
+    [ -r "$candidate" ] && { toml="$candidate"; break; }
+  done
+  toml="${toml:-}"
+
+  get() { grep -E "^$1[[:space:]]*=" "$toml" 2>/dev/null | sed -E 's/.*"?#?([0-9a-fA-F]{6})"?.*/\1/'; }
+  C1=$(get color4); C2=$(get color2); C3=$(get color6)
+  [ -z "$C1" ] && C1=33ccff; [ -z "$C2" ] && C2=00ff99; [ -z "$C3" ] && C3=7aa2f7
+
+  # Does this Hyprland speak Lua? If `eval` accepts an hl.config() call, yes.
+  if hyprctl eval 'hl.config({})' >/dev/null 2>&1; then
+    lua=1
+  else
+    lua=0
+  fi
+
+  # $1 = border value, $2 = borderangle animation enabled (true/false)
+  set_border() {
+    if [ "$lua" = 1 ]; then
+      hyprctl eval "hl.config({ general = { col = { active_border = $1 } } })" >/dev/null 2>&1
+    else
+      hyprctl keyword general:col.active_border "$1" >/dev/null 2>&1
+    fi
+  }
+
+  set_rotation() {
+    if [ "$lua" = 1 ]; then
+      hyprctl eval \
+        "hl.animation({ leaf = 'borderangle', enabled = $1, speed = 30, bezier = 'linear', style = 'loop' })" \
+        >/dev/null 2>&1
+    else
+      local enabled=0; [ "$1" = true ] && enabled=1
+      hyprctl keyword animation "borderangle,$enabled,30,linear,loop" >/dev/null 2>&1
+    fi
+  }
+
+  if [ "$lua" = 1 ]; then
+    base="{ colors = { 'rgb(${C1})', 'rgb(${C2})', 'rgb(${C3})' }, angle = 45 }"
+    pulse() { printf "{ colors = { 'rgba(%s%s)', 'rgba(%s%s)', 'rgba(%s%s)' }, angle = 45 }" \
+      "$C1" "$1" "$C2" "$1" "$C3" "$1"; }
+  else
+    base="rgb(${C1}) rgb(${C2}) rgb(${C3}) 45deg"
+    pulse() { printf "rgba(%s%s) rgba(%s%s) rgba(%s%s) 45deg" "$C1" "$1" "$C2" "$1" "$C3" "$1"; }
+  fi
+
+  restore() {
+    set_border "$base"
+    set_rotation true
+    exit 0
+  }
+  trap restore TERM INT
+
+  set_rotation false
+  while true; do
+    for a in 22 33 44 55 66 77 88 99 aa bb cc dd ee ff ee dd cc bb aa 99 88 77 66 55 44 33; do
+      set_border "$(pulse "$a")"
+      sleep 0.10
+    done
+  done
+) &
+echo $! > "$PIDF"

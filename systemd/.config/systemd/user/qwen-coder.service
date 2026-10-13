@@ -1,0 +1,13 @@
+[Unit]
+Description=Nemotron 3.5 Lightning local server (Docker llama.cpp, CUDA + MoE offload)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/qwen-llama-server
+ExecStopPost=-/usr/bin/docker rm -f qwen-coder
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

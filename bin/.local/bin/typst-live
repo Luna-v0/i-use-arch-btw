@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Open a Typst project in nvim with the live browser preview already running.
+#
+#   typst-live [dir-or-file]     (default: current directory)
+#
+# Works out the project layout and hands it to nvim through the environment
+# (read by ~/.config/nvim/lua/plugins/typst.lua):
+#   root   the given dir; if it has no .typ files but a typst/ subfolder does,
+#          that subfolder (so it works from the repo root too)
+#   main   main.typ, else the only .typ file in the root; or the file given
+#   fonts  <root>/fonts, if present
+set -euo pipefail
+
+target="${1:-.}"
+if [ -f "$target" ]; then
+  main=$(realpath "$target")
+  root=$(dirname "$main")
+else
+  root=$(realpath "$target")
+  if ! compgen -G "$root/*.typ" >/dev/null && [ -d "$root/typst" ]; then
+    root="$root/typst"
+  fi
+  if [ -f "$root/main.typ" ]; then
+    main="$root/main.typ"
+  else
+    mapfile -t typs < <(find "$root" -maxdepth 1 -name '*.typ' | sort)
+    if [ "${#typs[@]}" -eq 1 ]; then
+      main="${typs[0]}"
+    elif [ "${#typs[@]}" -eq 0 ]; then
+      echo "typst-live: no .typ files in $root" >&2; exit 1
+    else
+      echo "typst-live: no main.typ in $root; pass the file to preview:" >&2
+      printf '  typst-live %s\n' "${typs[@]#"$PWD/"}" >&2
+      exit 1
+    fi
+  fi
+fi
+
+export TYPST_ROOT="$root"
+export TYPST_MAIN="$main"
+if [ -d "$root/fonts" ]; then
+  export TYPST_FONT_PATHS="$root/fonts"
+else
+  unset TYPST_FONT_PATHS
+fi
+
+echo "typst-live: root=$root main=${main#"$root/"} fonts=${TYPST_FONT_PATHS:-system}"
+cd "$root"
+exec nvim "$main" -c "TypstPreview"

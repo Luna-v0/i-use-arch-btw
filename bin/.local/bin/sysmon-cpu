@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Emit CPU load / temperature / RAM as JSON for the lunav0.cpu bar widget.
+#   {"percent":17,"temp":48,"ram_used":12,"ram_total":32}
+#
+# CPU usage is a delta against the previous invocation's /proc/stat snapshot
+# rather than `mpstat 1 1`, which blocked for a full second on every poll.
+set -uo pipefail
+
+STATE="${XDG_RUNTIME_DIR:-/tmp}/sysmon-cpu.stat"
+
+read -r _ u n s i rest </proc/stat
+idle=$i
+total=$((u + n + s + i))
+for f in $rest; do total=$((total + f)); done
+
+percent=0
+if [ -r "$STATE" ]; then
+  read -r prev_total prev_idle <"$STATE" 2>/dev/null || true
+  dt=$((total - ${prev_total:-0}))
+  di=$((idle - ${prev_idle:-0}))
+  [ "$dt" -gt 0 ] && percent=$(( (100 * (dt - di) + dt / 2) / dt ))
+fi
+printf '%s %s\n' "$total" "$idle" >"$STATE"
+[ "$percent" -lt 0 ] && percent=0
+[ "$percent" -gt 100 ] && percent=100
+
+# Temperature: AMD k10temp (Tctl) first, then Intel coretemp package.
+temp=""
+if command -v sensors >/dev/null 2>&1; then
+  temp=$(sensors -j 2>/dev/null | python3 -c '
+import json, sys
+try:
+    chips = json.load(sys.stdin)
+except Exception:
+    raise SystemExit
+wanted = (("k10temp", "Tctl"), ("coretemp", "Package id 0"))
+for prefix, feature in wanted:
+    for chip, features in chips.items():
+        if not chip.startswith(prefix):
+            continue
+        readings = features.get(feature) or {}
+        for key, value in readings.items():
+            if key.endswith("_input"):
+                print(round(value))
+                raise SystemExit
+' 2>/dev/null)
+fi
+
+read -r used_mb total_mb < <(free -m | awk "/^Mem:/ {print \$3, \$2}")
+ram_used=$(( (used_mb + 1023) / 1024 ))
+ram_total=$(( (total_mb + 1023) / 1024 ))
+
+printf '{"percent":%d,"temp":%s,"ram_used":%d,"ram_total":%d}\n' \
+  "$percent" "${temp:-null}" "$ram_used" "$ram_total"

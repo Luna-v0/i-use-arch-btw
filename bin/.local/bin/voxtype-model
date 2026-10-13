@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Switch voxtype's default model between the fast and the accurate one. The
+# regular dictation keys (SUPER+CTRL+X, F9) then use whichever is active.
+#
+# small.en keeps up with speech on the iGPU (~3s for 13s of audio);
+# large-v3-turbo handles technical vocabulary far better but runs slower than
+# real time there (~12s for 9s). Restarting the daemon reloads the model in
+# well under a second.
+set -uo pipefail
+FAST="small.en"
+ACCURATE="large-v3-turbo"
+CONFIG="$HOME/.config/voxtype/config.toml"
+
+current=$(sed -n 's/^model = "\(.*\)"/\1/p' "$CONFIG" | head -1)
+if [ "$current" = "$FAST" ]; then next="$ACCURATE"; label="accurate"; else next="$FAST"; label="fast"; fi
+
+if voxtype setup model --set "$next" --restart >/dev/null 2>&1; then
+  notify-send -t 2000 "Dictation: $label" "voxtype model: $next"
+else
+  notify-send -u critical "Dictation" "Failed to switch voxtype to $next"
+  exit 1
+fi

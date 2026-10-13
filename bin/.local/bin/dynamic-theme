@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Build the "dynamic" Omarchy theme from an image and apply it system-wide.
+#   dynamic-theme [image]   (no arg -> fetch a fresh NASA APOD via nasa-wallpaper)
+# Extracts a palette (wallpaper-palette) into themes/dynamic/colors.toml, sets the
+# image as that theme's background, then `omarchy theme set dynamic` recolors
+# terminal/waybar/borders/mako/etc. from the palette. Never hard-fails at boot.
+set -uo pipefail
+
+THEME_DIR="$HOME/.config/omarchy/themes/dynamic"
+BG_DIR="$THEME_DIR/backgrounds"
+mkdir -p "$BG_DIR"
+
+img="${1:-}"
+if [ -z "$img" ]; then
+  img="$(wallpaper-fetch)" || { echo "dynamic-theme: no image (offline, no cache) — leaving theme unchanged"; exit 0; }
+fi
+[ -f "$img" ] || { echo "dynamic-theme: image not found: $img"; exit 1; }
+
+# Reuse the palette wallpaper-precompute built for this image; build and cache
+# it on a miss.
+cached="$(wallpaper-precompute --path-for "$img" 2>/dev/null)"
+if [ -n "$cached" ] && [ -s "$cached" ]; then
+  cp -f "$cached" "$THEME_DIR/colors.toml"
+elif wallpaper-palette "$img" "$THEME_DIR/colors.toml"; then
+  [ -n "$cached" ] && mkdir -p "${cached%/*}" && cp -f "$THEME_DIR/colors.toml" "$cached"
+else
+  echo "dynamic-theme: palette extraction failed — leaving theme unchanged"; exit 1
+fi
+
+# Make the chosen image this theme's sole background.
+rm -f "$BG_DIR"/* 2>/dev/null
+applied="$BG_DIR/$(basename "$img")"
+# Camera photos often store pixels sideways/upside down plus an EXIF Orientation
+# tag; the wallpaper renderer ignores the tag, so bake the rotation in. Untagged
+# images are copied as-is (no re-encode).
+orient="$(magick identify -format '%[EXIF:Orientation]' "$img" 2>/dev/null)"
+if [ -n "$orient" ] && [ "$orient" != 1 ] && magick "$img" -auto-orient "$applied"; then
+  :
+else
+  cp -f "$img" "$applied"
+fi
+
+omarchy theme set dynamic
+
+# Force the CHOSEN image to be the live wallpaper. `omarchy theme set` restores the
+# theme's remembered/cached background (an old one), so it would ignore our fresh
+# pick — omarchy-theme-bg-set repoints current/background AND updates omarchy-shell.
+omarchy-theme-bg-set "$applied" 2>/dev/null || omarchy-theme-bg-set "$img" 2>/dev/null || true
+
+# Make tmux follow the new palette too (omarchy doesn't theme tmux itself).
+tmux-palette || true

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Pick a wallpaper from WALLPAPER_DIR in Omarchy's image selector and apply it
+# with its (precomputed) palette via dynamic-theme. Bound to SUPER+CTRL+SPACE.
+set -uo pipefail
+
+WALLPAPER_DIR="${WALLPAPER_DIR:-$HOME/Pictures/wallpapers}"
+current="$(readlink -f "$HOME/.local/state/omarchy/current/background" 2>/dev/null)"
+
+choice="$(omarchy-menu-images --filterable --lazy-thumbnails \
+  ${current:+--selected "$current"} "$WALLPAPER_DIR")" || exit 1
+[ -n "$choice" ] && [ -f "$choice" ] || exit 0
+
+dynamic-theme "$choice"

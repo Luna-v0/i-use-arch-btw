@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Emit NVIDIA GPU load / temperature / VRAM as JSON for the lunav0.gpu widget.
+#   {"percent":5,"temp":38,"vram_used":1,"vram_total":16}
+# Prints {"available":false} when there is no NVIDIA GPU, which the widget
+# reads as "hide me" -- same as the old waybar module printing nothing.
+set -uo pipefail
+
+command -v nvidia-smi >/dev/null 2>&1 || { echo '{"available":false}'; exit 0; }
+
+read -r temp percent used total < <(
+  nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total \
+             --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ',' 
+) || true
+
+[ -n "${total:-}" ] && [ "${total:-0}" -gt 0 ] 2>/dev/null || { echo '{"available":false}'; exit 0; }
+
+vram_used=$(( (used + 1023) / 1024 ))
+vram_total=$(( (total + 1023) / 1024 ))
+
+printf '{"available":true,"percent":%d,"temp":%d,"vram_used":%d,"vram_total":%d}\n' \
+  "$percent" "$temp" "$vram_used" "$vram_total"

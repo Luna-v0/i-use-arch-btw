@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# pi-go: run the `pi` coding agent against the local llama.cpp server.
+#
+#   pi-go                     # interactive
+#   pi-go -p "task"           # headless one-shot — this is the SUBAGENT entrypoint
+#   pi-go --help              # this help
+#
+# WHY THIS EXISTS
+#   pi keeps its endpoint in ~/.pi/agent/models.json as a hardcoded `baseUrl` plus a
+#   hardcoded `contextWindow`. That breaks two ways: the URL goes stale whenever the
+#   model server moves port (e.g. a work docker-compose stack owning :8080 — the real
+#   situation here), and the context window silently under-advertises (it said 32768
+#   while the server served 262144). pi-go instead generates a THROWAWAY config dir
+#   and points pi at it with PI_CODING_AGENT_DIR, so ~/.pi is never modified.
+#   It asks the server what it actually serves (/props) rather than guessing.
+#
+# PORTABILITY (the point of using pi rather than dsh)
+#   Any agent with a shell tool can call `pi-go -p "..."` — no MCP server, no harness
+#   plugins, no config surgery. Set PI_GO_BASE_URL to pin an endpoint on a machine
+#   where the discovery/startup path does not apply.
+set -uo pipefail
+
+ALIAS=${PI_GO_ALIAS:-qwen3-coder}
+PORTS=${PI_GO_PORTS:-"8080 8081 8082 8083 8084"}
+
+usage() {
+  cat <<'HELP'
+pi-go — run the `pi` coding agent against the local model server.
+
+USAGE
+  pi-go [pi args...]            Interactive.
+  pi-go -p "task"               Headless one-shot. Use this to call pi AS A SUBAGENT.
+  pi-go --help                  Show this help.
+
+Everything that is not a pi-go flag is passed straight through to `pi`, so all of
+pi's own options work: --mode json, --thinking, --tools, --system-prompt, @files, etc.
+
+SUBAGENT USE
+  Another agent can delegate work by shelling out:
+
+    pi-go -p "List every caller of compute_total with file:line. Be terse."
+    pi-go -p --mode json "..."        # structured output for the caller to parse
+
+  In -p mode pi-go applies subagent-safe defaults (override any of them by passing
+  the flag yourself, or via the env knobs below):
+    --no-session         the context is throwaway, nothing is persisted
+    --thinking low       this model burns 3-5k reasoning tokens/step; low keeps a
+                         delegated lookup from costing minutes
+    --tools read,grep,ls
+                         genuinely read-only: a delegated task can read, search and
+                         list, but cannot mutate anything. pi's `grep` and `ls` tools
+                         are read-only and off by default, so this ALLOWLIST is what
+                         makes a safe subagent possible. Excluding only edit/write is
+                         NOT enough — `bash` can still rewrite files (verified: it
+                         did). Also drops web_search/web_fetch, which suits an
+                         offline work environment.
+                         Set PI_GO_WRITE=1 for pi's full default toolset, or
+                         PI_GO_TOOLS="read,grep,ls,bash" to pick your own.
+
+ENVIRONMENT
+  PI_GO_BASE_URL=URL   Use this endpoint verbatim; skips discovery entirely.
+                       e.g. PI_GO_BASE_URL=http://localhost:9000/v1 pi-go -p "hi"
+  PI_GO_PORTS="..."    Ports to probe for a running server (default 8080-8084).
+  PI_GO_ALIAS=NAME     Model alias to look for and request (default qwen3-coder).
+  PI_GO_CTX=N          Advertise this context window instead of asking the server.
+  PI_GO_THINKING=lvl   Thinking level in -p mode (default low; off|minimal|low|…|max).
+  PI_GO_WRITE=1        Use pi's full default toolset in -p mode (read, bash, edit,
+                       write, …) instead of the read-only allowlist.
+  PI_GO_TOOLS="a,b"    Explicit tool allowlist for -p mode (default read,grep,ls).
+  PI_GO_TIMEOUT=SEC    Wall-clock cap in -p mode (default 300, 0 disables). A delegated
+                       task that cannot succeed will otherwise spin indefinitely —
+                       observed: an impossible request burned 300s before being cut off.
+                       On timeout pi-go exits 124 so the caller can detect it.
+  PI_GO_START=1        If no server is found, start one via qwen-llama-server.
+  PI_GO_STOP=1         Stop the server on exit, but ONLY if pi-go started it.
+                       Off by default: a subagent must never reap the parent's server.
+
+NOTES
+  ~/.pi is never written to. The generated config lives under
+  ${XDG_RUNTIME_DIR:-/tmp}/pi-go/ and is refreshed whenever the port or context changes.
+HELP
+}
+
+# ── arg split: our flags vs pi's ────────────────────────────────────────────
+PRINT=0; PI_ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --help|-h)    usage; exit 0 ;;
+    -p|--print)   PRINT=1; PI_ARGS+=("$a") ;;
+    *)            PI_ARGS+=("$a") ;;
+  esac
+done
+
+# ── find the endpoint ───────────────────────────────────────────────────────
+# Identify our server by the model alias in /v1/models, not just /health: a foreign
+# app can answer /health, and pointing pi at someone else's service is worse than
+# failing (this exact collision happens here, where :8080 is a work stack).
+is_ours() { curl -s --max-time 2 "http://localhost:$1/v1/models" 2>/dev/null | grep -q "$ALIAS"; }
+
+BASE=""; PORT=""; STARTED=0
+if [ -n "${PI_GO_BASE_URL:-}" ]; then
+  BASE="$PI_GO_BASE_URL"
+else
+  for p in $PORTS; do is_ours "$p" && { PORT=$p; break; }; done
+  if [ -z "$PORT" ] && [ -n "${PI_GO_START:-}" ] && command -v qwen-llama-server >/dev/null 2>&1; then
+    echo "pi-go: no server found; starting one…" >&2
+    LLAMA_DETACH=1 qwen-llama-server >/tmp/pi-go-server.log 2>&1 || true
+    for i in $(seq 90); do
+      for p in $PORTS; do is_ours "$p" && { PORT=$p; break 2; }; done
+      sleep 2
+    done
+    [ -n "$PORT" ] && STARTED=1
+  fi
+  [ -n "$PORT" ] || {
+    echo "pi-go: no local model server serving '$ALIAS' on: $PORTS" >&2
+    echo "       start one (dsh-go, or PI_GO_START=1 pi-go …) or set PI_GO_BASE_URL." >&2
+    exit 1
+  }
+  BASE="http://localhost:$PORT/v1"
+fi
+
+cleanup() {
+  # Only ever stop a server we started ourselves, and only when asked. A subagent
+  # reaping the parent agent's model would be a nasty surprise.
+  [ "$STARTED" = 1 ] && [ -n "${PI_GO_STOP:-}" ] && docker rm -f qwen-coder >/dev/null 2>&1
+  return 0
+}
+trap cleanup EXIT
+
+# ── context window: ask the server rather than guess ────────────────────────
+# Advertising more than the server serves causes overflow errors; advertising less
+# wastes the window and triggers early compaction. /props knows the truth.
+CTX=${PI_GO_CTX:-}
+if [ -z "$CTX" ]; then
+  CTX=$(curl -s --max-time 3 "${BASE%/v1}/props" 2>/dev/null \
+        | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin)
+    g=d.get("default_generation_settings") or {}
+    print(int(g.get("n_ctx") or d.get("n_ctx") or 0))
+except Exception: print(0)' 2>/dev/null)
+fi
+[ -n "$CTX" ] && [ "$CTX" -gt 0 ] 2>/dev/null || CTX=32768
+
+# ── generate the throwaway pi config ────────────────────────────────────────
+CFG="${XDG_RUNTIME_DIR:-/tmp}/pi-go"
+mkdir -p "$CFG" 2>/dev/null
+python3 - "$CFG" "$BASE" "$CTX" "$ALIAS" <<'PY'
+import json,os,sys
+cfg,base,ctx,alias = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+# PI_CODING_AGENT_DIR expects the json files FLAT in the directory (not under agent/).
+src = os.path.expanduser("~/.pi/agent")
+models = {"providers": {}}
+settings = {}
+if os.path.isdir(src):                      # inherit the user's providers/theme/packages
+    for name, tgt in (("models.json", "models"), ("settings.json", "settings")):
+        try:
+            with open(os.path.join(src, name)) as f: data = json.load(f)
+            if tgt == "models": models = data
+            else: settings = data
+        except Exception: pass
+models.setdefault("providers", {})
+local = models["providers"].get("local", {})
+local.update({"api": "openai-completions", "apiKey": local.get("apiKey", "local"), "baseUrl": base})
+ms = [m for m in local.get("models", []) if m.get("id") != alias]
+ms.insert(0, {"id": alias, "contextWindow": ctx, "input": ["text"], "reasoning": False, "_launch": True})
+local["models"] = ms
+models["providers"]["local"] = local
+settings.update({"defaultProvider": "local", "defaultModel": alias})
+for name, data in (("models.json", models), ("settings.json", settings)):
+    with open(os.path.join(cfg, name), "w") as f: json.dump(data, f, indent=1)
+for name in ("auth.json", "models-store.json"):                 # carry over if present
+    s = os.path.join(src, name)
+    if os.path.exists(s) and not os.path.exists(os.path.join(cfg, name)):
+        try:
+            with open(s) as a, open(os.path.join(cfg, name), "w") as b: b.write(a.read())
+        except Exception: pass
+PY
+
+export PI_CODING_AGENT_DIR="$CFG"
+export PI_OFFLINE="${PI_OFFLINE:-1}"        # work env: no startup network calls
+
+# ── subagent-safe defaults, only in -p mode, only if not already specified ──
+has() { printf '%s\n' "${PI_ARGS[@]}" | grep -qx -- "$1"; }
+if [ "$PRINT" = 1 ]; then
+  has --no-session                              || PI_ARGS+=(--no-session)
+  has --thinking                                || PI_ARGS+=(--thinking "${PI_GO_THINKING:-low}")
+  # An ALLOWLIST is required for a safe subagent: excluding edit/write still leaves
+  # `bash`, which can rewrite files just as well (confirmed experimentally).
+  if [ -z "${PI_GO_WRITE:-}" ]; then
+    has --tools || has -t || has --exclude-tools || has -xt \
+      || PI_ARGS+=(--tools "${PI_GO_TOOLS:-read,grep,ls}")
+  fi
+fi
+
+# In -p mode, cap wall clock: a subagent that cannot finish must fail fast rather
+# than hang the parent agent. `timeout` returns 124, which the caller can check.
+TMO=${PI_GO_TIMEOUT:-300}
+if [ "$PRINT" = 1 ] && [ "$TMO" != 0 ] && command -v timeout >/dev/null 2>&1; then
+  exec timeout "$TMO" pi --provider local --model "$ALIAS" ${PI_ARGS[@]+"${PI_ARGS[@]}"}
+fi
+exec pi --provider local --model "$ALIAS" ${PI_ARGS[@]+"${PI_ARGS[@]}"}

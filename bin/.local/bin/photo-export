@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Export a folder of photos to shareable JPEG/PNG, zipped, originals untouched.
+
+    photo-export [FOLDER] [options]
+
+Takes NEF (Nikon raw) and JPEG sources and produces best-quality
+consumer-friendly images in a single .zip. The source folder is only ever
+READ -- nothing is written into it, and the original NEF/JPEG files are never
+modified. All work happens in a temp directory that is removed at the end.
+
+Pipeline per file:
+  - NEF (raw): developed with dcraw_emu using the camera's white balance and a
+    high-quality demosaic, into sRGB, then encoded to the target format. This
+    is a real raw develop, not the small embedded preview.
+  - JPEG -> jpg: the original bytes are COPIED verbatim. Re-encoding a JPEG
+    always loses a little quality, so for the highest fidelity a copy wins.
+  - JPEG -> png: transcoded (PNG is lossless, so no quality is lost beyond
+    whatever the source JPEG already had).
+
+Requires: dcraw_emu (libraw) for NEF, magick (ImageMagick) for encoding.
+"""
+from __future__ import annotations
+
+import argparse
+import concurrent.futures as futures
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+RAW_EXTS = {".nef"}
+JPEG_EXTS = {".jpg", ".jpeg"}
+SRC_EXTS = RAW_EXTS | JPEG_EXTS
+
+
+def die(msg: str) -> None:
+    print(f"photo-export: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def have(cmd: str) -> bool:
+    return shutil.which(cmd) is not None
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="photo-export",
+        description="Export NEF/JPEG photos to shareable JPEG/PNG in a zip; originals untouched.",
+    )
+    p.add_argument("folder", nargs="?", default=".", help="folder of photos (default: current directory)")
+    p.add_argument("-f", "--format", choices=["jpg", "png"], default="jpg", help="output format (default: jpg)")
+    p.add_argument("-q", "--quality", type=int, default=95, help="JPEG quality 1-100 (default: 95)")
+    p.add_argument("-o", "--output", help="zip path (default: <folder>-export.zip next to the folder)")
+    p.add_argument("-r", "--recursive", action="store_true", help="recurse into subfolders")
+    p.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4, help="parallel workers (default: CPU count)")
+    p.add_argument("--max-edge", type=int, default=0, help="downscale so the longest edge is at most N px (0 = full size)")
+    return p.parse_args(argv)
+
+
+def collect_sources(folder: Path, recursive: bool) -> list[Path]:
+    walker = folder.rglob("*") if recursive else folder.glob("*")
+    return sorted(f for f in walker if f.is_file() and f.suffix.lower() in SRC_EXTS)
+
+
+def output_names(sources: list[Path], ext: str) -> dict[Path, str]:
+    """Map each source to a unique in-zip name, disambiguating collisions.
+
+    DSC1.NEF and DSC1.JPG both want DSC1.jpg; the second gets DSC1_JPG.jpg so
+    neither silently overwrites the other in the archive.
+    """
+    names: dict[Path, str] = {}
+    seen: set[str] = set()
+    for src in sources:
+        base = f"{src.stem}.{ext}"
+        if base in seen:
+            base = f"{src.stem}_{src.suffix.lstrip('.').upper()}.{ext}"
+            n = 2
+            while base in seen:
+                base = f"{src.stem}_{src.suffix.lstrip('.').upper()}_{n}.{ext}"
+                n += 1
+        seen.add(base)
+        names[src] = base
+    return names
+
+
+def encode_args(fmt: str, quality: int, max_edge: int) -> list[str]:
+    args: list[str] = ["-auto-orient"]
+    if max_edge > 0:
+        args += ["-resize", f"{max_edge}x{max_edge}>"]
+    if fmt == "jpg":
+        args += ["-quality", str(quality), "-sampling-factor", "4:2:0", "-interlace", "JPEG"]
+    else:  # png
+        args += ["-define", "png:compression-level=9"]
+    return args
+
+
+def develop_raw(src: Path, tmp: Path) -> Path:
+    """Develop a NEF to a 16-bit sRGB TIFF inside tmp, never touching src's dir.
+
+    dcraw_emu writes <input>.tiff next to its input, so the NEF is first copied
+    into tmp; the original on disk is only read.
+    """
+    work = tmp / src.name
+    shutil.copy2(src, work)
+    # -w camera WB, -o 1 sRGB, -q 3 AHD (high-quality demosaic), -6 16-bit, -T tiff.
+    subprocess.run(
+        ["dcraw_emu", "-w", "-o", "1", "-q", "3", "-6", "-T", str(work)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    )
+    tiff = work.with_suffix(work.suffix + ".tiff")
+    if not tiff.exists():  # some libraw builds replace the suffix instead of appending
+        tiff = work.with_suffix(".tiff")
+    if not tiff.exists():
+        raise RuntimeError("dcraw_emu produced no TIFF")
+    work.unlink(missing_ok=True)  # drop the NEF copy; keep only the developed TIFF
+    return tiff
+
+
+def process(src: Path, out_name: str, args: argparse.Namespace, tmp_root: Path) -> tuple[Path, str | None]:
+    """Return (staged_output_path, error). error is None on success."""
+    ext = src.suffix.lower()
+    out = tmp_root / out_name
+    enc = encode_args(args.format, args.quality, args.max_edge)
+    try:
+        if ext in JPEG_EXTS and args.format == "jpg" and args.max_edge == 0:
+            # Highest fidelity jpg->jpg at full size is the original bytes.
+            shutil.copy2(src, out)
+        elif ext in JPEG_EXTS:
+            subprocess.run(["magick", str(src), *enc, str(out)],
+                           check=True, stderr=subprocess.PIPE)
+        elif ext in RAW_EXTS:
+            with tempfile.TemporaryDirectory(dir=tmp_root, prefix="raw-") as d:
+                tiff = develop_raw(src, Path(d))
+                subprocess.run(["magick", str(tiff), *enc, str(out)],
+                               check=True, stderr=subprocess.PIPE)
+        else:
+            return out, f"unsupported: {src.name}"
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or b"").decode(errors="replace").strip().splitlines()
+        return out, f"{src.name}: {detail[-1] if detail else 'command failed'}"
+    except Exception as e:  # noqa: BLE001 -- report per-file, keep the batch going
+        return out, f"{src.name}: {e}"
+    return out, None
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+
+    if not have("magick"):
+        die("ImageMagick 'magick' not found (needed to encode).")
+
+    folder = Path(args.folder).expanduser().resolve()
+    if not folder.is_dir():
+        die(f"not a folder: {folder}")
+
+    sources = collect_sources(folder, args.recursive)
+    if not sources:
+        die(f"no NEF/JPEG files found in {folder}" + (" (recursively)" if args.recursive else ""))
+
+    if any(s.suffix.lower() in RAW_EXTS for s in sources) and not have("dcraw_emu"):
+        die("NEF files present but 'dcraw_emu' (libraw) not found. Install libraw, or drop the NEFs.")
+
+    out_zip = Path(args.output).expanduser().resolve() if args.output \
+        else folder.parent / f"{folder.name}-export.zip"
+
+    names = output_names(sources, args.format)
+    n = len(sources)
+    print(f"photo-export: {n} file(s) from {folder}")
+    print(f"  format={args.format} quality={args.quality} jobs={args.jobs}"
+          + (f" max-edge={args.max_edge}" if args.max_edge else ""))
+    print(f"  -> {out_zip}\n")
+
+    errors: list[str] = []
+    staged: list[tuple[Path, str]] = []  # (path_on_disk, name_in_zip)
+
+    with tempfile.TemporaryDirectory(prefix="photo-export-") as tmp:
+        tmp_root = Path(tmp)
+        done = 0
+        with futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
+            fut = {ex.submit(process, s, names[s], args, tmp_root): s for s in sources}
+            for f in futures.as_completed(fut):
+                out, err = f.result()
+                done += 1
+                src = fut[f]
+                if err:
+                    errors.append(err)
+                    print(f"  [{done}/{n}] FAIL  {src.name}")
+                else:
+                    staged.append((out, names[src]))
+                    print(f"  [{done}/{n}] ok    {src.name} -> {names[src]}")
+
+        if not staged:
+            die("nothing was converted; no zip written.")
+
+        print(f"\nphoto-export: writing {len(staged)} image(s) to the zip ...")
+        # Images are already compressed, so STORED avoids pointless re-deflation.
+        with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_STORED) as zf:
+            for path, arcname in sorted(staged, key=lambda t: t[1]):
+                zf.write(path, arcname)
+
+    size_mb = out_zip.stat().st_size / (1024 * 1024)
+    print(f"photo-export: done. {len(staged)} image(s), {size_mb:.1f} MB -> {out_zip}")
+    if errors:
+        print(f"\nphoto-export: {len(errors)} file(s) failed:", file=sys.stderr)
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Serve a local GGUF via the LATEST llama.cpp in Docker (CUDA + Gated-Delta-Net).
+# The ggml-org/llama.cpp:server-cuda image has the fused GDN kernel the old
+# ollama-bundled build lacked, so DeltaNet models run fast, and --jinja makes
+# agent tool-call loops work over OpenAI /v1.
+#
+# TWO offload modes (the fused GDN kernel needs ALL attention on GPU either way):
+#   * MoE mode (default): --n-cpu-moe N parks experts in RAM, attention on GPU.
+#       LLAMA_NCMOE=8 qwen-llama-server            # more experts on GPU: faster
+#   * Dense mode: keep attention on GPU, offload only FFN tensors of the highest
+#     layers to CPU (the dense analog of --n-cpu-moe). Triggered by either:
+#       LLAMA_OT='blk\.(4[89]|5[0-9]|6[0-3])\.ffn=CPU' qwen-llama-server
+#       LLAMA_FFN_CPU_FROM=48 qwen-llama-server     # auto-build the regex: offload
+#                                                   # FFN of layers 48..NLAYERS-1
+#
+#   qwen-llama-server                  # foreground (for the systemd service)
+#   LLAMA_DETACH=1 qwen-llama-server   # start detached, return immediately (dsh-go)
+set -uo pipefail
+IMG="${LLAMA_IMG:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
+GGUF_DIR="${LLAMA_GGUF_DIR:-$HOME/.cache/gguf}"
+FILE="${LLAMA_GGUF_FILE:-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-fit16gib.gguf}"
+ALIAS="${LLAMA_ALIAS:-qwen3-coder}"
+PORT="${LLAMA_PORT:-8080}"; CTX="${LLAMA_CTX:-32768}"; NCMOE="${LLAMA_NCMOE:-12}"
+NAME="${LLAMA_NAME:-qwen-coder}"
+NLAYERS="${LLAMA_NLAYERS:-64}"
+# -ngl: layers on GPU. <99 = whole-layer offload (attention too) — disables the fused
+# GDN kernel but lets a dense model hold huge context by putting whole layers in RAM.
+NGL="${LLAMA_NGL:-99}"
+[ -f "$GGUF_DIR/$FILE" ] || { echo "GGUF not found: $GGUF_DIR/$FILE"; exit 1; }
+
+# Build the FFN->CPU override regex from LLAMA_FFN_CPU_FROM if LLAMA_OT isn't given.
+OT="${LLAMA_OT:-}"
+if [ -z "$OT" ] && [ -n "${LLAMA_FFN_CPU_FROM:-}" ] && [ "${LLAMA_FFN_CPU_FROM}" -lt "$NLAYERS" ]; then
+  nums=""
+  for i in $(seq "${LLAMA_FFN_CPU_FROM}" "$((NLAYERS-1))"); do nums="${nums:+$nums|}$i"; done
+  OT="blk\\.($nums)\\.ffn=CPU"
+fi
+
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+# Workaround: the nvidia container toolkit currently mounts a stale nvidia-uvm
+# device major (237) that doesn't match the host's live one (238), so CUDA init
+# fails ("unknown error") under --gpus all and llama.cpp silently runs on CPU.
+# Bind the real host uvm nodes explicitly. Harmless once a reboot resyncs majors.
+uvm=(); for d in /dev/nvidia-uvm /dev/nvidia-uvm-tools; do [ -e "$d" ] && uvm+=(--device "$d"); done
+# The image's built-in HEALTHCHECK hardcodes :8080, so on any other port docker
+# reports "unhealthy" while the server is actually fine. Point it at the real port.
+health=(--health-cmd "curl -fsS http://localhost:$PORT/health || exit 1")
+# KV slot save/restore, backed by tmpfs so it's a RAM<->VRAM bulk copy. Measured on
+# the 35B: restoring 10k tokens took 39ms (175MB @ 4.5GB/s) vs 15.9s to re-prefill
+# them. ⚠️ BUT this model is HYBRID (full_attention_interval=4, so only 10 of 40
+# layers hold KV): the disk path does NOT serialize prompt.checkpoints, which hybrid
+# memory needs to roll back to a prefix — so disk restore gives reuse ONLY for
+# byte-identical pure appends (already free via the prefix cache) and 0% for any
+# divergent prompt, silently (upstream #28194/#25913). The flag is kept for
+# cross-restart persistence only. The mechanism that actually works is the in-RAM
+# prompt cache below (--cache-ram + --cache-idle-slots), which DOES carry checkpoints.
+SLOTS_DIR="${LLAMA_SLOTS_DIR:-/dev/shm/llama-slots}"
+mkdir -p "$SLOTS_DIR" 2>/dev/null
+args=(--name "$NAME" --gpus all "${uvm[@]}" "${health[@]}" -v "$GGUF_DIR":/models:ro \
+  -v "$SLOTS_DIR":/slots -p "$PORT:$PORT" "$IMG"
+  --slot-save-path /slots --cache-idle-slots
+  --kv-unified --cache-ram "${LLAMA_CACHE_RAM:-32768}" -ctxcp "${LLAMA_CTX_CHECKPOINTS:-64}"
+  -m "/models/$FILE" -a "$ALIAS" -ngl "$NGL" -fa on
+  --cache-type-k q8_0 --cache-type-v q8_0 -c "$CTX" --jinja --host 0.0.0.0 --port "$PORT")
+# Mode selection:
+#   OT set           -> dense FFN-split (attention on GPU, fused kernel ON, fast)
+#   NGL<99           -> dense whole-layer offload (attention too -> fused OFF, slow, huge ctx)
+#   LLAMA_DENSE=1    -> dense fully on GPU
+#   else             -> MoE, park experts in RAM via --n-cpu-moe
+if [ -n "$OT" ]; then
+  args+=(--override-tensor "$OT"); mode="dense[ffn->cpu ngl=$NGL]"
+elif [ "$NGL" != 99 ]; then
+  mode="dense[whole-layer ngl=$NGL, fused OFF]"
+elif [ -n "${LLAMA_DENSE:-}" ]; then
+  mode="dense[full-gpu]"
+else
+  args+=(--n-cpu-moe "$NCMOE"); mode="moe[n-cpu-moe=$NCMOE]"
+fi
+
+# Speculative decoding with a small CPU-resident draft (LLAMA_DRAFT=<gguf in GGUF_DIR>).
+# Draft + its (quantized) KV live in system RAM (--spec-draft-ngl 0), so it adds ~zero
+# VRAM — the win case for a CPU-bound target (e.g. dense whole-layer at huge ctx: measured
+# 3.8 @256k 3.1 -> 4.8 tok/s). Draft must share the target's vocab (a Qwen3 0.6B works).
+if [ -n "${LLAMA_DRAFT:-}" ] && [ -f "$GGUF_DIR/$LLAMA_DRAFT" ]; then
+  args+=(-md "/models/$LLAMA_DRAFT" --spec-draft-ngl 0
+    --spec-draft-type-k q4_0 --spec-draft-type-v q4_0
+    --spec-type draft-simple --spec-draft-n-max "${LLAMA_DRAFT_NMAX:-6}")
+  mode="$mode +spec-draft($LLAMA_DRAFT)"
+fi
+
+if [ -n "${LLAMA_DETACH:-}" ]; then
+  echo "starting '$ALIAS' detached [$mode ctx=$CTX] $FILE"; exec docker run -d "${args[@]}"
+else
+  echo "serving '$ALIAS' -> http://127.0.0.1:$PORT/v1  [$mode ctx=$CTX] $FILE"; exec docker run --rm "${args[@]}"
+fi

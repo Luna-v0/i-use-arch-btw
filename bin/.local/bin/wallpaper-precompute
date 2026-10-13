@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Precompute a colors.toml palette for every wallpaper, so switching wallpaper
+# (wallpaper-pick, or dynamic-theme at boot) applies an already-built theme.
+#   wallpaper-precompute              build missing/stale palettes, prune orphans
+#   wallpaper-precompute --path-for IMG   print the cache file IMG's palette uses
+# Cache: ~/.cache/wallpaper-themes/<sha1 of path+size+mtime>.toml, so editing or
+# replacing an image (or the generator) invalidates its entry. Source dir: WALLPAPER_DIR.
+set -uo pipefail
+
+WALLPAPER_DIR="${WALLPAPER_DIR:-$HOME/Pictures/wallpapers}"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/wallpaper-themes"
+
+# Palettes are also keyed on the generator itself, so editing wallpaper-palette
+# rebuilds every cached theme on the next run instead of serving stale ones.
+GEN_KEY="$(sha1sum "$(command -v wallpaper-palette)" 2>/dev/null | cut -d' ' -f1)"
+
+cache_path() {  # $1 = image
+  local key
+  key="$(stat -L -c '%s %Y' "$1" 2>/dev/null)" || return 1
+  printf '%s\n' "$CACHE/$(printf '%s\0%s\0%s' "$(readlink -f "$1")" "$key" "$GEN_KEY" | sha1sum | cut -d' ' -f1).toml"
+}
+
+if [ "${1:-}" = "--path-for" ]; then
+  [ -n "${2:-}" ] || { echo "usage: wallpaper-precompute --path-for <image>" >&2; exit 2; }
+  cache_path "$2"
+  exit
+fi
+
+mkdir -p "$CACHE"
+[ -d "$WALLPAPER_DIR" ] || { echo "wallpaper-precompute: no $WALLPAPER_DIR" >&2; exit 0; }
+
+declare -A keep=()
+todo=()
+while IFS= read -r -d '' img; do
+  out="$(cache_path "$img")" || continue
+  keep["$out"]=1
+  [ -s "$out" ] || todo+=("$img" "$out")
+done < <(find -L "$WALLPAPER_DIR" -type f \
+  \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print0)
+
+# Build missing palettes in parallel, at low priority. Write to a temp file and
+# rename so an interrupted run never leaves a truncated palette behind.
+if [ "${#todo[@]}" -gt 0 ]; then
+  printf '%s\0' "${todo[@]}" | nice -n 19 xargs -0 -n 2 -P "$(nproc)" \
+    sh -c 'wallpaper-palette "$1" "$2.tmp" >/dev/null 2>&1 && mv -f "$2.tmp" "$2" || rm -f "$2.tmp"' _
+fi
+
+# Drop palettes whose image was removed or changed.
+pruned=0
+for f in "$CACHE"/*.toml; do
+  [ -e "$f" ] || continue
+  [ -n "${keep[$f]:-}" ] || { rm -f "$f"; pruned=$((pruned + 1)); }
+done
+
+echo "wallpaper-precompute: ${#keep[@]} wallpapers, $(( ${#todo[@]} / 2 )) built, $pruned pruned"

@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Upgrade ollama and pull a model, choosing how to get a new-enough build.
+#
+#   ollama-upgrade [model]         # from Arch 'extra' if it has something newer (keeps GPU, no full -Syu)
+#   ollama-upgrade --aur [model]   # AUR prebuilt (ollama-bin + ollama-cuda13)
+#   ollama-upgrade --latest [model]# official newest binary from github.com/ollama (incl. CUDA)
+#
+# Default model: qwen3.8:27b. Needs sudo (it will prompt).
+set -uo pipefail
+
+MODE=repo
+case "${1:-}" in
+  --aur)    MODE=aur;    shift ;;
+  --latest) MODE=latest; shift ;;
+esac
+MODEL="${1:-qwen3.8:27b}"
+
+say() { printf '\n\033[1;36m==>\033[0m %s\n' "$*"; }
+ver() { pacman -Q "$1" 2>/dev/null | awk '{print $2}'; }
+
+case "$MODE" in
+repo)
+  say "Refreshing package databases (-Sy only, no full upgrade)…"
+  sudo pacman -Sy || { echo "db refresh failed"; exit 1; }
+  INST="$(ver ollama)"
+  REPO="$(pacman -Si ollama 2>/dev/null | awk -F': +' '/^Version/{print $2}')"
+  echo "   installed: ${INST:-none}    extra repo: ${REPO:-none}"
+  if [ -n "$REPO" ] && [ -n "$INST" ] && [ "$(vercmp "$REPO" "$INST")" -gt 0 ]; then
+    say "extra has a newer ollama ($REPO) — upgrading ollama + ollama-cuda only…"
+    sudo pacman -S --needed ollama ollama-cuda || { echo "upgrade failed"; exit 1; }
+  else
+    say "Arch 'extra' has nothing newer than ${INST:-?} yet."
+    cat <<'EOF'
+   Upstream ollama lands in 'extra' a couple days after release. Options:
+     • wait 1–2 days and re-run:  ollama-upgrade
+     • AUR prebuilt now:          ollama-upgrade --aur
+     • official newest now:       ollama-upgrade --latest
+EOF
+    exit 0
+  fi
+  ;;
+
+aur)
+  say "Installing AUR prebuilt (ollama-bin + ollama-cuda13) — replaces extra ollama/ollama-cuda…"
+  yay -S ollama-bin ollama-cuda13 || { echo "AUR install failed"; exit 1; }
+  ;;
+
+latest)
+  command -v jq >/dev/null || { echo "jq required"; exit 1; }
+  say "Finding the latest official ollama release…"
+  TAG="$(curl -fsS --max-time 15 https://api.github.com/repos/ollama/ollama/releases/latest | jq -r .tag_name)"
+  [ -n "$TAG" ] && [ "$TAG" != null ] || { echo "couldn't determine latest tag"; exit 1; }
+  say "Latest is $TAG — downloading the amd64 bundle (includes CUDA)…"
+  tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+  curl -fL --progress-bar -o "$tmp/ollama.tar.zst" \
+    "https://github.com/ollama/ollama/releases/download/$TAG/ollama-linux-amd64.tar.zst" \
+    || { echo "download failed"; exit 1; }
+
+  say "Stopping service and removing the Arch ollama packages (prevents a /usr/local shadow)…"
+  sudo systemctl stop ollama 2>/dev/null || true
+  sudo pacman -R --noconfirm ollama-cuda ollama 2>/dev/null || true
+  # nuke any leftover manual copy too, just in case
+  sudo rm -rf /usr/local/bin/ollama /usr/local/lib/ollama
+
+  say "Installing $TAG into /usr/local…"
+  sudo tar -C /usr/local --zstd -xf "$tmp/ollama.tar.zst"
+  id ollama >/dev/null 2>&1 || sudo useradd -r -s /usr/bin/nologin -d /var/lib/ollama ollama
+
+  say "Writing the systemd unit (models drop-in at /etc/systemd/system/ollama.service.d/ still applies)…"
+  sudo tee /etc/systemd/system/ollama.service >/dev/null <<'UNIT'
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/bin"
+
+[Install]
+WantedBy=default.target
+UNIT
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now ollama 2>/dev/null || sudo systemctl restart ollama
+  echo "   (to return to Arch packages later: sudo rm -rf /usr/local/bin/ollama /usr/local/lib/ollama /etc/systemd/system/ollama.service && sudo pacman -S ollama ollama-cuda)"
+  ;;
+esac
+
+say "Restarting ollama service…"
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+sleep 2
+hash -r 2>/dev/null || true
+
+say "Versions now:"
+echo "   client: $(ollama --version 2>&1 | grep -i version | head -1)"
+echo "   server: $(curl -s --max-time 5 localhost:11434/api/version 2>/dev/null || echo 'API not reachable')"
+
+say "Pulling $MODEL …"
+if ollama pull "$MODEL"; then
+  say "Done — run it with:  ollama run $MODEL"
+  echo "   (verify GPU use:  journalctl -u ollama -n 40 | grep -i -E 'gpu|cuda|vram' )"
+else
+  cat <<EOF
+
+   Pull still failed. If it said "requires a newer version" even on --latest, the
+   release may not include qwen3.8 support yet. Otherwise check the service log:
+     journalctl -u ollama -n 50 --no-pager
+EOF
+  exit 1
+fi

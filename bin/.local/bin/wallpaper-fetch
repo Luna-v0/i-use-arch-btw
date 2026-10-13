@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Print the path of a wallpaper for the dynamic theme.
+#
+# Source order:
+#   1. Local folder ~/Pictures/wallpapers (override: WALLPAPER_DIR) — a random
+#      image is picked directly, no download. This is the default source.
+#   2. wallhaven.cc — random high-res ultrawide, only if the folder is empty/
+#      missing, or when WALLPAPER_SOURCE=online forces it. Offline -> newest cached.
+#
+# Tunables (env or edit): WALLPAPER_DIR, WALLPAPER_SOURCE (auto|online|local),
+#   WALLPAPER_QUERY (default "space"), WALLPAPER_ATLEAST, WALLPAPER_RATIOS.
+# Optional wallhaven API key at ~/.config/wallpaper-fetch/apikey (not required).
+set -uo pipefail
+
+# --- 1. Local wallpaper folder (preferred) ------------------------------------
+WALLPAPER_DIR="${WALLPAPER_DIR:-$HOME/Pictures/wallpapers}"
+WALLPAPER_SOURCE="${WALLPAPER_SOURCE:-auto}"
+if [ "$WALLPAPER_SOURCE" != "online" ] && [ -d "$WALLPAPER_DIR" ]; then
+  pick_local="$(find "$WALLPAPER_DIR" -type f \
+    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) \
+    2>/dev/null | shuf -n1)"
+  if [ -n "$pick_local" ]; then echo "$pick_local"; exit 0; fi
+fi
+[ "$WALLPAPER_SOURCE" = "local" ] && { echo "wallpaper-fetch: no images in $WALLPAPER_DIR" >&2; exit 1; }
+
+# --- 2. wallhaven.cc fallback -------------------------------------------------
+
+CACHE="$HOME/.config/omarchy/backgrounds/dynamic"
+KEYFILE="$HOME/.config/wallpaper-fetch/apikey"
+QUERY="${WALLPAPER_QUERY:-space}"
+ATLEAST="${WALLPAPER_ATLEAST:-3440x1440}"
+RATIOS="${WALLPAPER_RATIOS:-21x9}"
+mkdir -p "$CACHE"
+apikey=""; [ -r "$KEYFILE" ] && apikey="&apikey=$(tr -d '[:space:]' < "$KEYFILE")"
+
+newest_cached() { ls -t "$CACHE"/wh-* "$CACHE"/apod-* 2>/dev/null | head -1; }
+api="https://wallhaven.cc/api/v1/search"
+
+pick() {  # $1 = extra query params
+  local json
+  json="$(curl -fsS --max-time 20 \
+    "$api?categories=100&purity=100&sorting=random&q=${QUERY}${apikey}$1")" || return 1
+  jq -r '.data[0].path // empty' <<<"$json" 2>/dev/null
+}
+
+url="$(pick "&atleast=${ATLEAST}&ratios=${RATIOS}")"
+[ -n "$url" ] || url="$(pick "&atleast=${ATLEAST}")"            # drop ratio if too strict
+[ -n "$url" ] || url="$(pick "&ratios=${RATIOS}")"             # drop min-res as last resort
+[ -n "$url" ] || { c="$(newest_cached)"; [ -n "$c" ] && { echo "$c"; exit 0; }; exit 1; }
+
+ext="${url##*.}"; case "$ext" in jpg|jpeg|png|JPG|JPEG|PNG) ;; *) ext="jpg" ;; esac
+out="$CACHE/wh-$(date +%s).$ext"
+if curl -fsSL --max-time 90 -o "$out" "$url" && [ -s "$out" ]; then
+  ls -t "$CACHE"/wh-* 2>/dev/null | tail -n +11 | xargs -r rm -f
+  echo "$out"
+else
+  rm -f "$out"
+  c="$(newest_cached)"; [ -n "$c" ] && { echo "$c"; exit 0; }
+  exit 1
+fi
