@@ -28,6 +28,7 @@ Not stow packages:
 | `quattro/` | Omarchy 3 → 4 migration kit. `quattro/legacy/` keeps the retired waybar, walker, mako, swayosd, hyprlock and hypridle configs |
 | `ollama/` | Modelfile for `ollama create` |
 | `scripts/` | Custom Python scripts (e.g., `hyprtui.py` for Hyprland TUI) |
+| `system/` | Standalone `sudo`-run host-hardening scripts, one subdirectory per concern (e.g. `ssh-firewall/`). Not stowed; run directly, never applied automatically |
 
 ## ⚠️ Machine-Specific Files
 
