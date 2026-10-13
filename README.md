@@ -19,6 +19,7 @@ Stow packages (each mirrors its path under `~`):
 | `systemd/` | User systemd services and their enablement links |
 | `opencode/` | opencode with a local Ollama provider |
 | `antigravity/` | `local-subagent` plugin under `~/.gemini/config/plugins` |
+| `applications/` | `~/.local/share/applications` launchers for WhatsApp, Youtube Music and Discord, pinned to their per-profile Chromium `--user-data-dir` (see `hypr/.config/hypr/webapps.lua`) so relaunching from the app grid doesn't fall back to the default, logged-out profile |
 
 Not stow packages:
 
@@ -36,6 +37,7 @@ These files contain hardware-specific configurations and **need to be adjusted p
 |------|---------|
 | `hypr/.config/hypr/monitors.lua` | Monitor layout, resolution, and scaling |
 | `hypr/.config/hypr/gpu.lua` | VA-API/GLX routing for an AMD iGPU + NVIDIA dGPU |
+| `applications/.local/share/applications/{WhatsApp,Youtube Music,Discord}.desktop` | `--user-data-dir` is the absolute `$HOME` path baked in at write time (Exec= can't expand `~` or `$HOME`); update it for a different username |
 
 ## 📦 Installation
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Name=Youtube Music
+Comment=Youtube Music
+Exec=omarchy-launch-webapp https://music.youtube.com/ --user-data-dir=/home/lunav0/.local/share/omarchy-webapps/ytmusic
+Terminal=false
+Type=Application
+Icon=/home/lunav0/.local/share/applications/icons/Youtube Music.png
+StartupNotify=true

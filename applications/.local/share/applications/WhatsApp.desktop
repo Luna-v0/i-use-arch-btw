@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Name=WhatsApp
+Exec=omarchy-launch-webapp https://web.whatsapp.com/ --user-data-dir=/home/lunav0/.local/share/omarchy-webapps/whatsapp
+Terminal=false
+Type=Application
+Icon=whatsapp
+StartupNotify=true
