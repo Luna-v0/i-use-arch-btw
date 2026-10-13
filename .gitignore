@@ -11,3 +11,10 @@ omarchy/.config/omarchy/current/
 *.bak
 *.bak.*
 *.tui-migration.bak
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Claude Code session state for this repo
+.claude/
