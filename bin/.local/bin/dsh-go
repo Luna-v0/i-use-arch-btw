@@ -290,7 +290,7 @@ export DSH_LOCAL_CTX="${CTX:-32768}"
 # Resume handling: with no id, auto-pick the newest session for the current dir.
 if [ "$RESUME" = 1 ] && [ -z "$RESUME_ID" ]; then
   key="--$(pwd | sed 's:^/::; s:/:-:g')--"
-  latest=$(ls -1dt "$HOME/.dsh/sessions/$key"/main-session-* 2>/dev/null | head -1)
+  latest=$(ls -1dt "${DSH_HOME:-$HOME/.dsh}/sessions/$key"/main-session-* 2>/dev/null | head -1)
   if [ -n "$latest" ]; then RESUME_ID=$(basename "$latest"); printf '↩  resuming %s\n' "$RESUME_ID"
   else echo "↩  no prior session for $(pwd) — starting fresh"; RESUME=0; fi
 fi
