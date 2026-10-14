@@ -28,3 +28,6 @@ __pycache__/
 # tmux plugins are cloned and updated by TPM (prefix+I / prefix+U); only tpm is a submodule
 tmux/.config/tmux/plugins/*
 !tmux/.config/tmux/plugins/tpm
+
+# lcc FIM benchmark raw results (phase 2 of reports/2026-10-14-minuet-on-lcc.md) — local scratch, not for the repo
+lcc/bench/fim_bench_results/

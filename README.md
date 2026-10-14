@@ -29,6 +29,7 @@ Not stow packages:
 | `ollama/` | Modelfile for `ollama create` |
 | `scripts/` | Custom Python scripts (e.g., `hyprtui.py` for Hyprland TUI) |
 | `system/` | Standalone `sudo`-run host-hardening scripts, one subdirectory per concern (e.g. `ssh-firewall/`). Not stowed; run directly, never applied automatically |
+| `lcc/` | FIM completion server for minuet-ai, deployed to and run on `lcc` (a different machine), not this one. Launcher script + `systemd --user` unit (not enabled) + a latency/quality benchmark. See `lcc/README.md` |
 
 ## ⚠️ Machine-Specific Files
 

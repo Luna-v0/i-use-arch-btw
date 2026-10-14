@@ -1,0 +1,42 @@
+[
+  {
+    "id": "py-cache-single-line",
+    "language": "python",
+    "source": "ana/scrappers/leis_br/cache.py (ja_coletado); wrapped in a bare class stub so the snippet parses standalone",
+    "prefix": "class CacheScrapers:\n    def ja_coletado(self, url: str, hash_conteudo: str) -> bool:\n        \"\"\"Verifica se um documento já foi coletado com o mesmo hash.\"\"\"\n        with sqlite3.connect(self.caminho_db) as conn:\n            row = conn.execute(\n                \"SELECT hash FROM documentos WHERE url = ?\", (url,)\n            ).fetchone()\n",
+    "suffix": "\n\n    def registrar(self, url: str, hash_conteudo: str) -> None:\n        pass\n",
+    "expected_middle": "        return row is not None and row[0] == hash_conteudo"
+  },
+  {
+    "id": "py-cache-multi-line",
+    "language": "python",
+    "source": "ana/scrappers/leis_br/cache.py (registrar, SQL body); wrapped in a bare class stub so the snippet parses standalone",
+    "prefix": "class CacheScrapers:\n    def registrar(self, url, hash_conteudo, fonte, titulo=\"\", vigencia=\"ativa\") -> None:\n        \"\"\"Registra ou atualiza um documento no cache.\"\"\"\n        with sqlite3.connect(self.caminho_db) as conn:\n            conn.execute(\n",
+    "suffix": "\n            )\n            conn.commit()\n        logger.debug(f\"Cache: registrado '{titulo}' de '{fonte}'\")\n",
+    "expected_middle": "                \"\"\"\n                INSERT OR REPLACE INTO documentos\n                    (url, hash, fonte, titulo, vigencia, data_coleta)\n                VALUES (?, ?, ?, ?, ?, ?)\n                \"\"\",\n                (url, hash_conteudo, fonte, titulo, vigencia, datetime.now().isoformat()),"
+  },
+  {
+    "id": "py-config-single-line",
+    "language": "python",
+    "source": "ana/backend/ana/config.py (_em_docker); suffix trimmed to a safe boundary (drops the dangling start of the next class) so the snippet parses standalone",
+    "prefix": "def _em_docker() -> bool:\n    \"\"\"Detecta automaticamente se está rodando dentro de um container Docker.\n\n    O Docker cria o arquivo /.dockerenv em todos os containers ao iniciar.\n    Não requer variáveis de ambiente — zero configuração.\n\n    Returns:\n        True se executando dentro de um container Docker.\n    \"\"\"\n",
+    "suffix": "\n\n\nSOME_OTHER_CONSTANT = 1\n",
+    "expected_middle": "    return os.path.exists(\"/.dockerenv\")"
+  },
+  {
+    "id": "lua-gpu-single-line",
+    "language": "lua",
+    "source": "hypr/.config/hypr/gpu.lua (shell_output)",
+    "prefix": "local function shell_output(command)\n  local pipe = io.popen(\"( \" .. command .. \" ) 2>/dev/null\")\n  if not pipe then\n    return nil\n  end\n\n",
+    "suffix": "\n  pipe:close()\n\n  if output == \"\" then\n    return nil\n  end\n\n  return output\nend\n",
+    "expected_middle": "  local output = (pipe:read(\"*a\") or \"\"):gsub(\"%s+$\", \"\")"
+  },
+  {
+    "id": "lua-webapps-single-line",
+    "language": "lua",
+    "source": "hypr/.config/hypr/webapps.lua (profile_flag)",
+    "prefix": "local profiles = \"/home/x/.local/share/omarchy-webapps/\"\n\nlocal function profile_flag(name)\n",
+    "suffix": "\nend\n",
+    "expected_middle": "  return \" --user-data-dir=\" .. profiles .. name"
+  }
+]

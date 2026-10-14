@@ -1,0 +1,19 @@
+[Unit]
+Description=llama.cpp FIM completion server for nvim minuet-ai (lcc)
+After=docker.service network-online.target tailscaled.service
+Wants=network-online.target
+# Not enabled or started by this repo. See lcc/README.md before enabling:
+# phase-2 picks the model and confirms the real on/off commands.
+
+[Service]
+Type=simple
+Environment=LCC_FIM_MODEL=Qwen2.5-Coder-7B.Q4_K_M.gguf
+# Adjust this path to wherever this repo (or just the lcc/ folder) is
+# deployed on lcc -- see lcc/README.md. Assumes ~/.dotfiles is cloned there.
+ExecStart=%h/.dotfiles/lcc/bin/lcc-fim-server.sh
+ExecStop=-/usr/bin/docker stop lcc-fim
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
