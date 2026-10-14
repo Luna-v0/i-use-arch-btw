@@ -13,7 +13,7 @@ TV = "desc:LG Electronics LG TV 0x01010101"
 hl.env("GDK_SCALE", "1")
 
 -- Primary: ultrawide at native resolution, at the origin.
-hl.monitor({ output = UW, mode = "3440x1440@159.96", position = "0x0", scale = 1 })
+hl.monitor({ output = UW, mode = "3440x1440@159.96", position = "0x0", scale = 1, bitdepth = 8 })
 
 -- Secondary: the TV scaled up so text renders larger.
 --
