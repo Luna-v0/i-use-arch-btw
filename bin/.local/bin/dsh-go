@@ -19,7 +19,9 @@ USAGE
 
 MODELS  (same port + alias in every mode, so dsh needs no reconfig)
   (default)  Qwen3.6-35B-A3B Q4_K_M — SWE-bench 73.4 coding flagship. 3B active, experts
-             park in RAM. ~45 tok/s @32k, 40 @128k, 34.5 @256k. Fits 16GB. Default ctx 256k.
+             park in RAM. Runs the q36 profile (4 CPU threads, bigger prompt batch,
+             n-cpu-moe 28): ~45 tok/s @32k, 40 @128k, 34.5 @256k. Fits 16GB. Default ctx 256k.
+             LLAMA_PROFILE=legacy dsh-go reproduces the pre-2026-10-14 default exactly.
   --flash    Qwen3.8-Flash-Next 125B-A6B (IQ4_XS) — biggest smarts, ~19 tok/s warm; experts
              page from RAM/SSD, so the FIRST prompt is slow. Default ctx 32k.
   --nemo     Nemotron 3.5 Lightning 30B-A3B — ~62 tok/s @256k, but weaker on real work.
@@ -28,8 +30,8 @@ MODELS  (same port + alias in every mode, so dsh needs no reconfig)
              thinking, ~17 tok/s per agent, but VRAM is full (15.9 GB): 64k shared pool,
              each agent told 32k, no room for a second model. For hard, short problems.
              Measured in /mnt/hd/Repos/local-llm-bench (2026-10-13).
-  LLAMA_PROFILE=q36 dsh-go   Default model, same 2x256k context, but 4 CPU threads and a
-             bigger prompt batch: ~2x prompt speed, and no collapse when the CPU is busy.
+  LLAMA_PROFILE=legacy dsh-go   Default model, same 2x256k context, but the old 8-thread
+             n-cpu-moe ladder (32→30→28) and no -ub/-b bump. Opt out of the q36 default.
 
 OPTIONS
   --resume [ID]  Resume a dsh session; with no ID, picks the newest one for the current dir.
@@ -215,16 +217,31 @@ case "$MODE" in
     CTX=${LLAMA_CTX:-262144}
     POOL=${LLAMA_POOL:-$((CTX*2))}
     if [ "$was_up" = 0 ]; then
-      # n-cpu-moe ladder, picked by POOL (the pool drives VRAM, not the per-agent window).
-      # Measured @512k pool: 24 OOMs; 32 fits at 12,950MiB/3,430 free (~same VRAM as a
-      # 256k pool at ncmoe=24) ~20 tok/s; 28 -> 14,678/1,702 ~22; 26 -> 15,542/838 (tight).
-      # Start at 32 for headroom: concurrent slots allocate extra compute buffers.
-      if   [ "$POOL" -le 131072 ]; then ladder="18 20 24 26"
-      elif [ "$POOL" -le 262144 ]; then ladder="24 26 28 32"
-      else                              ladder="32 30 28"; fi
-      printf '⟳  Qwen3.6-35B-A3B — %sk pool for 2 agents @ %sk each (~20-25 tok/s)…\n' \
-        "$((POOL/1024))" "$((CTX/1024))"
-      run_ladder "$POOL" $ladder || { echo "could not start 35B: $START_ERR"; exit 1; }
+      if [ "${LLAMA_PROFILE:-}" = legacy ]; then
+        export LLAMA_PROFILE=legacy
+        # Pre-2026-10-14 default: 8 threads, -ub 512, n-cpu-moe laddered by POOL (the
+        # pool drives VRAM, not the per-agent window). Measured @512k pool: 24 OOMs;
+        # 32 fits at 12,950MiB/3,430 free (~same VRAM as a 256k pool at ncmoe=24)
+        # ~20 tok/s; 28 -> 14,678/1,702 ~22; 26 -> 15,542/838 (tight). Start at 32 for
+        # headroom: concurrent slots allocate extra compute buffers.
+        if   [ "$POOL" -le 131072 ]; then ladder="18 20 24 26"
+        elif [ "$POOL" -le 262144 ]; then ladder="24 26 28 32"
+        else                              ladder="32 30 28"; fi
+        printf '⟳  Qwen3.6-35B-A3B (legacy) — %sk pool for 2 agents @ %sk each (~20-25 tok/s)…\n' \
+          "$((POOL/1024))" "$((CTX/1024))"
+        run_ladder "$POOL" $ladder || { echo "could not start 35B: $START_ERR"; exit 1; }
+      else
+        # DEFAULT (measured 2026-10-13, /mnt/hd/Repos/local-llm-bench): same model, same
+        # 512k pool / 4 slots, but qwen-llama-server's q36 profile (4 CPU threads, -ub
+        # 1024, -b 2048) and a fixed n-cpu-moe 28 instead of laddering from 32 — ~34.5
+        # tok/s per agent with 2 vs ~20-25 before, no 8-thread collapse under CPU load.
+        # LLAMA_PROFILE=legacy dsh-go reproduces the old ladder+args exactly.
+        export LLAMA_PROFILE=${LLAMA_PROFILE:-q36}
+        : "${LLAMA_NCMOE:=28}"
+        printf '⟳  Qwen3.6-35B-A3B — %sk pool for 2 agents @ %sk each (q36 profile, ~34.5 tok/s)…\n' \
+          "$((POOL/1024))" "$((CTX/1024))"
+        run_ladder "$POOL" "$LLAMA_NCMOE" || { echo "could not start 35B: $START_ERR"; exit 1; }
+      fi
     fi
     ;;
   flash)
