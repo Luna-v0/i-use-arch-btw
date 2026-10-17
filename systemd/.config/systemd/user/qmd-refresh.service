@@ -1,0 +1,10 @@
+[Unit]
+Description=QMD nightly index + embedding refresh (CPU-only, nice)
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+Environment=QMD_FORCE_CPU=1
+Environment=QMD_LLAMA_GPU=false
+ExecStart=/usr/bin/env bash -lc '/home/lunav0/.local/share/mise/installs/node/25.2.1/bin/qmd update && /home/lunav0/.local/share/mise/installs/node/25.2.1/bin/qmd embed'
