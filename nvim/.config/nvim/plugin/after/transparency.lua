@@ -65,11 +65,10 @@ for _, name in ipairs(groups) do
 	make_transparent(name)
 end
 
--- Popups with a solid body (completion menu and docs, the cmdline popup, snacks
--- windows, trouble, float titles) keep the theme's darkest background, which
--- reads as a near-black hole next to the transparent editor. Give them the
--- theme's own background lifted a little toward its foreground instead.
-local LIFT = 0.08 -- 0 = the theme background, 1 = its foreground
+-- Markdown quotes ("> ...") use the theme's comment grey, which nearly
+-- vanishes against the background. Lift them partway toward the normal text
+-- colour, keeping the theme's other attributes (italic).
+local QUOTE_LIFT = 0.65 -- 0 = the theme background, 1 = its foreground
 
 local function blend(a, b, t)
 	local out = 0
@@ -80,33 +79,8 @@ local function blend(a, b, t)
 	return out
 end
 
-local popups = {
-	"BlinkCmpMenu",
-	"BlinkCmpMenuBorder",
-	"BlinkCmpDoc",
-	"BlinkCmpDocBorder",
-	"BlinkCmpSignatureHelp",
-	"BlinkCmpSignatureHelpBorder",
-	"NoiceCmdlinePopup",
-	"NoiceCmdlinePopupBorder",
-	"NoiceCmdlinePopupBorderSearch",
-	"NoiceConfirm",
-	"NoiceConfirmBorder",
-	"SnacksNormal",
-	"SnacksNormalNC",
-	"TroubleNormal",
-	"TelescopePromptNormal",
-	"FloatTitle",
-	"FloatFooter",
-}
-
 if vim.g.theme_normal_bg and vim.g.theme_normal_fg then
-	local lifted = blend(vim.g.theme_normal_bg, vim.g.theme_normal_fg, LIFT)
-	for _, name in ipairs(popups) do
-		local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
-		if ok and hl.bg then
-			hl.bg = lifted
-			vim.api.nvim_set_hl(0, name, hl)
-		end
-	end
+	local hl = vim.api.nvim_get_hl(0, { name = "@markup.quote", link = false })
+	hl.fg = blend(vim.g.theme_normal_bg, vim.g.theme_normal_fg, QUOTE_LIFT)
+	vim.api.nvim_set_hl(0, "@markup.quote", hl)
 end
