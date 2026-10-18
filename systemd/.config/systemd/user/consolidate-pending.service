@@ -1,0 +1,8 @@
+[Unit]
+Description=Nightly maintenance facts.md pending-consolidation gather (deterministic, no LLM)
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/usr/bin/env bash -lc 'python3 /mnt/hd/Repos/maintenance/_global/scripts/consolidate.py pending > /mnt/hd/Repos/maintenance/_global/facts-pending.md'
