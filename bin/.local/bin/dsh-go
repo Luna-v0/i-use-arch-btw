@@ -16,6 +16,20 @@ dsh-go — start the local coding model, open the dsh TUI, stop the model on exi
 
 USAGE
   dsh-go [--smart|--flash|--nemo] [--resume [ID]] [profile] [other dsh flags...]
+  dsh-go --lab [--smart|--flash|--nemo] [--resume [ID]]
+  dsh-go --deepseek [--resume [ID]]
+
+LAB MODES  (the isolated dsh-lab study home, DSH_HOME=~/.dsh-lab -- never the
+daily ~/.dsh; see /mnt/hd/Repos/dsh-lab)
+  --lab      Local model (same choices as above) + the lab home's `lab` profile,
+             run directly on the installed dsh (0.1.1-rc.2) -- dsh-tui doesn't
+             mount on 0.2.1 yet, so this flag stays on 0.1.1-rc.2 on purpose.
+             A bare profile word still overrides `lab`. (The separate `dsh-lab`
+             wrapper runs the 0.2.1 side-by-side install instead, for
+             headless/eval use only, until dsh-tui ships a 0.2.x release.)
+  --deepseek The lab home, DeepSeek Flash selected (--patch
+             $DSH_HOME/deepseek-flash.patch.yml). Starts NO local model and
+             uses NO VRAM or GPU -- skips the whole model-ladder/docker step.
 
 MODELS  (same port + alias in every mode, so dsh needs no reconfig)
   (default)  Qwen3.6-35B-A3B Q4_K_M — SWE-bench 73.4 coding flagship. 3B active, experts
@@ -74,7 +88,8 @@ NOTES
 HELP
 }
 
-MODE=q35; PROFILE=tui; RESUME=0; RESUME_ID=""; APP_ARGS=()
+MODE=q35; PROFILE=tui; PROFILE_EXPLICIT=0; RESUME=0; RESUME_ID=""; APP_ARGS=()
+LAB=0; DEEPSEEK=0
 args=("$@"); i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   a=${args[$i]}
@@ -83,16 +98,40 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --flash) MODE=flash ;;          # Qwen3.8-Flash-Next 125B (big smarts, slow 1st prompt)
     --nemo) MODE=nemo ;;            # Nemotron 3.5 Lightning 30B-A3B (fast, weaker)
     --smart) MODE=smart ;;          # Qwen3.8-27B dense, all in VRAM (LLAMA_PROFILE=smart)
+    --lab) LAB=1 ;;                 # isolated dsh-lab home, local model (see usage)
+    --deepseek) LAB=1; DEEPSEEK=1 ;; # isolated dsh-lab home, DeepSeek Flash, no local model
     --resume)                       # resume a session; optional id after it
       RESUME=1
       nxt=${args[$((i+1))]:-}
       if [ -n "$nxt" ] && [ "${nxt#-}" = "$nxt" ]; then RESUME_ID=$nxt; i=$((i+1)); fi
       ;;
     --*)   APP_ARGS+=("$a") ;;      # any other launcher/app flag: pass through
-    *)     PROFILE="$a" ;;          # bare word = dsh profile (default tui)
+    *)     PROFILE="$a"; PROFILE_EXPLICIT=1 ;;  # bare word = dsh profile (default tui)
   esac
   i=$((i+1))
 done
+
+if [ "$LAB" = 1 ]; then
+  export DSH_HOME="${DSH_LAB_HOME:-$HOME/.dsh-lab}" DSH_TELEMETRY_DISABLED=1
+  [ -d "$DSH_HOME/profiles" ] || { echo "dsh-go --lab: $DSH_HOME is not set up (see /mnt/hd/Repos/dsh-lab docs/04-phased-plan.md)" >&2; exit 1; }
+  [ "$PROFILE_EXPLICIT" = 1 ] || PROFILE=lab
+fi
+
+# --deepseek: the lab home, DeepSeek Flash, no local model, no VRAM/GPU use at
+# all -- skip the entire model-ladder/docker/port-selection path below and go
+# straight to dsh. Separate from --lab's branch above so it can exit early.
+if [ "$DEEPSEEK" = 1 ]; then
+  PATCH="$DSH_HOME/deepseek-flash.patch.yml"
+  [ -f "$PATCH" ] || { echo "dsh-go --deepseek: missing $PATCH (see /mnt/hd/Repos/dsh-lab templates/home/deepseek-flash.patch.yml)" >&2; exit 1; }
+  if [ "$RESUME" = 1 ] && [ -z "$RESUME_ID" ]; then
+    key="--$(pwd | sed 's:^/::; s:/:-:g')--"
+    latest=$(ls -1dt "$DSH_HOME/sessions/$key"/main-session-* 2>/dev/null | head -1)
+    if [ -n "$latest" ]; then RESUME_ID=$(basename "$latest"); printf '↩  resuming %s\n' "$RESUME_ID"
+    else echo "↩  no prior session for $(pwd) — starting fresh"; RESUME=0; fi
+  fi
+  [ "$RESUME" = 1 ] && [ -n "$RESUME_ID" ] && APP_ARGS+=(--resume "$RESUME_ID")
+  exec dsh --profile "$PROFILE" --patch "$PATCH" ${APP_ARGS[@]+"${APP_ARGS[@]}"}
+fi
 
 DEFAULT_MODE=q35
 
