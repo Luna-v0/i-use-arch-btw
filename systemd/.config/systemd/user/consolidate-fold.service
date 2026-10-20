@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly unattended facts.md fold: top-3 pending entries via headless claude -p + the consolidate skill
+After=consolidate-pending.service
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=%h/.local/bin/consolidate-fold

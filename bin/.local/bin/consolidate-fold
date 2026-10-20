@@ -1,0 +1,248 @@
+#!/bin/bash
+#
+# consolidate-fold: nightly unattended facts.md fold for the project-registry
+# maintenance repo (/mnt/hd/Repos/maintenance).
+#
+# The 03:10 consolidate-pending.timer/.service already run nightly and are
+# purely deterministic (no LLM): they call
+#   python3 /mnt/hd/Repos/maintenance/_global/scripts/consolidate.py pending
+# and write the result to /mnt/hd/Repos/maintenance/_global/facts-pending.md
+# -- one line per entry with new reports/session-log/decisions since its
+# facts.md was last folded, sorted by how much is pending.
+#
+# This script is the fold itself: it takes the top N pending refs (default
+# 3) and for each one runs the `consolidate` skill headlessly via
+# `claude -p "/consolidate <ref>"`. This is a new unattended-agent surface
+# (an LLM running with no one watching), so it was only added after an
+# explicit yes from the user (QUESTIONS #52, answered 2026-10-20; see
+# maintenance/dotfiles/dotfiles/reports/2026-10-20-nightly-facts-fold.md).
+#
+# This machine (fantasy) is not always on -- the 03:10/03:40 timers can both
+# be missed for days. Two things make that safe to catch up on:
+#   - this script never trusts the cached facts-pending.md as-is: it
+#     recomputes it itself (same deterministic `consolidate.py pending`
+#     call the 03:10 service makes) right before picking the top N, so a
+#     stale or missing cache from a skipped night is a non-issue -- it is
+#     always working from a fresh pending list. consolidate-fold.service
+#     still orders `After=consolidate-pending.service` as a hint for when
+#     both land in the same boot/login catch-up, but nothing here actually
+#     depends on that ordering.
+#   - an flock (held for the whole run, fd 9) stops two instances of this
+#     script from overlapping -- e.g. a catch-up run at login racing a
+#     manual invocation. A second instance exits 0 immediately instead of
+#     double-folding.
+# Persistent=true on the timer (see consolidate-fold.timer) is what gets a
+# missed night caught up at all: for a user-session timer that means "run
+# once, the next time this user logs in," not "wait for 03:40 again."
+#
+# Safety, all enforced on the claude invocation itself, not just by convention:
+#   - --permission-mode dontAsk, explicitly. Two other modes were tried and
+#     rejected on review, each confirmed unsafe by an actual probe (ask a
+#     throwaway `claude -p` under the candidate flags to Write a file
+#     outside facts.md and see what happens):
+#       * `acceptEdits` auto-approves Edit/Write ANYWHERE under the working
+#         directory regardless of --allowedTools -- it would have let the
+#         fold write outside facts.md despite the allowlist looking scoped.
+#       * passing no --permission-mode at all falls back to this account's
+#         ambient default (on this machine, the "auto" classifier) --
+#         probed live and it silently wrote a file to an arbitrary path
+#         with NO prompt and no denial, because that mode decides per-action
+#         whether something "would prompt" at all, not a fixed allow/deny
+#         list. --permission-prompts none only blocks what would've
+#         prompted, so an ambient mode that doesn't prompt for a plain
+#         Write defeats the whole allowlist silently.
+#     `dontAsk` does not fall through to any such classifier: probed live,
+#     it denied a Write outside facts.md, denied a Bash command not matching
+#     the allow pattern below (treats Bash as off unless specifically
+#     allowed), and allowed exactly the facts.md write and the
+#     consolidate.py Bash pattern it's supposed to.
+#   - --allowedTools restricts tool use to exactly what the consolidate
+#     skill needs: Read/Grep/Glob (unrestricted -- reading/searching the
+#     maintenance tree is the skill's whole job), `Edit(/**/facts.md)`
+#     (path-scoped to files literally named facts.md anywhere under the
+#     workspace root -- a leading `/` in a Claude Code permission specifier
+#     anchors there, i.e. $MAINT here, not the filesystem root), and Bash
+#     calls to consolidate.py itself (gather/mark/note -- the deterministic
+#     half of the fold). No general Bash, no git, no network tool, no
+#     edit/write to anything but a facts.md file. Note there is no separate
+#     `Write(...)` rule: probed live and confirmed Write-tool calls are NOT
+#     matched by path rules at all -- only `Edit(path)` rules are, and they
+#     cover every file-editing tool (Edit, Write, NotebookEdit). A bare
+#     `Write(...)` entry here would be dead weight at best, misleading at
+#     worst.
+#   - --disallowedTools 'Bash(git *)' is belt-and-suspenders on top of that:
+#     this job must never commit or push.
+#   - --permission-prompts none means anything that WOULD have prompted
+#     under dontAsk is auto-DENIED rather than blocking on a prompt nobody
+#     is there to answer -- required for a cron-launched, unattended run.
+#     (Under dontAsk this is close to redundant -- that mode already
+#     doesn't interactively prompt -- but it's kept explicit in case a
+#     future build adds a dontAsk case that would.)
+#   - a wall-clock `timeout` wraps each claude call so a stuck fold can't run
+#     forever (one bad night costs at most $TIMEOUT_SECS, not the box).
+#   - --max-budget-usd caps spend per entry as a second ceiling independent
+#     of the timeout.
+#   - cwd is the maintenance repo itself for every call, so relative paths in
+#     the skill/script behave the same as an interactive session, and so
+#     the Edit/Write path scope above (anchored to the workspace root)
+#     resolves to $MAINT and nowhere else.
+#
+# This script never calls git itself either -- it only shells out to
+# consolidate.py (gather/pending/mark/note) and to `claude -p`.
+#
+# Flags:
+#   --dry-run       print the refs it would fold and the exact command for
+#                   each, run nothing.
+#   -n, --count N   fold the top N pending refs instead of the default 3.
+#   -h, --help      this text.
+#
+# Env overrides (all optional): MAINT, PENDING_FILE, LOG_DIR, LOCK_FILE,
+# TIMEOUT_SECS, MAX_BUDGET_USD, MODEL, COUNT.
+#
+# Logs every run to $LOG_DIR/<YYYY-MM-DD>.log (default
+# ~/.cache/claude-agent-scratch/consolidate-fold/).
+#
+# Not enabled by this repo: enabling the timer is a separate, explicit step
+# (see the report above for the exact command). This script is safe to run
+# by hand any time; --dry-run is always safe.
+
+set -euo pipefail
+
+MAINT="${MAINT:-/mnt/hd/Repos/maintenance}"
+PENDING_FILE="${PENDING_FILE:-$MAINT/_global/facts-pending.md}"
+CONSOLIDATE_PY="$MAINT/_global/scripts/consolidate.py"
+COUNT="${COUNT:-3}"
+LOG_DIR="${LOG_DIR:-$HOME/.cache/claude-agent-scratch/consolidate-fold}"
+LOCK_FILE="${LOCK_FILE:-$HOME/.cache/claude-agent-scratch/consolidate-fold.lock}"
+TIMEOUT_SECS="${TIMEOUT_SECS:-900}"
+MAX_BUDGET_USD="${MAX_BUDGET_USD:-2.00}"
+MODEL="${MODEL:-sonnet}"
+DRY_RUN=0
+
+usage() {
+  sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    -n|--count) COUNT="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "consolidate-fold: unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+log() {
+  printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG_FILE" >&2
+}
+
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  mkdir -p "$LOG_DIR"
+  # Stop a catch-up run (e.g. at the next login after fantasy was off at
+  # 03:40) from overlapping another instance of this same script. A second
+  # instance backs off immediately rather than double-folding or racing
+  # the first one's writes to facts.md.
+  exec 9>"$LOCK_FILE"
+  if ! flock -n 9; then
+    echo "consolidate-fold: another run is already in progress ($LOCK_FILE held) -- exiting" >&2
+    exit 0
+  fi
+fi
+LOG_FILE="$LOG_DIR/$(date +%F).log"
+
+# Recompute the pending list ourselves instead of trusting the cached
+# facts-pending.md: deterministic and cheap (no LLM), and it means a missed
+# or stale 03:10 gather (this machine isn't always on) never leaves the
+# fold working from stale data. Real runs overwrite facts-pending.md with
+# the fresh result (same file the 03:10 service writes, same format) so
+# other consumers (e.g. /overview) stay in sync too; --dry-run computes it
+# into a scratch copy and leaves the real file untouched.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  PENDING_SRC="$(mktemp)"
+  trap 'rm -f "$PENDING_SRC"' EXIT
+  python3 "$CONSOLIDATE_PY" pending >"$PENDING_SRC"
+else
+  TMP_PENDING="$(mktemp)"
+  python3 "$CONSOLIDATE_PY" pending >"$TMP_PENDING"
+  mv "$TMP_PENDING" "$PENDING_FILE"
+  PENDING_SRC="$PENDING_FILE"
+fi
+
+# facts-pending.md lines look like:
+#   - <project>/<name>: N new item(s) since <date|never>
+# already sorted by consolidate.py pending (most-pending first), so the
+# first COUNT lines are the top-N.
+mapfile -t REFS < <(grep -E '^- ' "$PENDING_SRC" | sed -E 's/^- ([^:]+):.*/\1/' | head -n "$COUNT")
+
+if [[ ${#REFS[@]} -eq 0 ]]; then
+  echo "consolidate-fold: nothing pending" >&2
+  exit 0
+fi
+
+# Edit(...) covers Edit/Write/NotebookEdit alike (confirmed live -- a
+# separate Write(...) rule is not matched by path checks at all), scoped to
+# files literally named facts.md anywhere under the workspace root (a
+# leading '/' in a permission specifier anchors there -- see the header
+# comment). Read/Grep/Glob stay unrestricted: the skill needs to read
+# reports/status.md/context.md/decisions.md freely.
+#
+# Two Bash rules for the *same* script: the skill tells the model to run
+# consolidate.py with the absolute path, but confirmed live that the model
+# sometimes invokes it with the cwd-relative path instead (cwd is already
+# $MAINT, so both resolve to the same file) -- allow both forms so neither
+# phrasing fails. A command the model chains with `cd ... &&` first is NOT
+# covered by either rule and WILL be denied under dontAsk -- confirmed
+# live that dontAsk refuses to match a compound/chained command against an
+# allow rule at all, even one written to include the exact `&&` text. That
+# is dontAsk working as intended (a chain could smuggle anything after the
+# allowed part), not a bug to route around; cwd is already correct, so the
+# model never needs to cd, and a fold that hits this just logs a failure
+# for that ref and gets retried the next pending cycle.
+CONSOLIDATE_PY_REL="_global/scripts/consolidate.py"
+ALLOWED_TOOLS="Read Grep Glob Edit(/**/facts.md) Bash(python3 $CONSOLIDATE_PY *) Bash(python3 $CONSOLIDATE_PY_REL *)"
+DISALLOWED_TOOLS="Bash(git *)"
+
+run_one() {
+  local ref="$1"
+  local prompt="/consolidate ${ref}"
+  (
+    cd "$MAINT"
+    timeout "${TIMEOUT_SECS}" claude -p "$prompt" \
+      --model "$MODEL" \
+      --permission-mode dontAsk \
+      --allowedTools "$ALLOWED_TOOLS" \
+      --disallowedTools "$DISALLOWED_TOOLS" \
+      --permission-prompts none \
+      --max-budget-usd "$MAX_BUDGET_USD"
+  )
+}
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "consolidate-fold --dry-run: would fold ${#REFS[@]} ref(s) (freshly recomputed, $PENDING_FILE left untouched)"
+  for ref in "${REFS[@]}"; do
+    echo
+    echo "ref: $ref"
+    printf 'cmd: (cd %q && timeout %q claude -p %q --model %q --permission-mode dontAsk --allowedTools %q --disallowedTools %q --permission-prompts none --max-budget-usd %q)\n' \
+      "$MAINT" "$TIMEOUT_SECS" "/consolidate ${ref}" "$MODEL" "$ALLOWED_TOOLS" "$DISALLOWED_TOOLS" "$MAX_BUDGET_USD"
+  done
+  exit 0
+fi
+
+log "starting fold: ${#REFS[@]} ref(s): ${REFS[*]}"
+
+FAILED=0
+for ref in "${REFS[@]}"; do
+  log "folding $ref"
+  if run_one "$ref" >>"$LOG_FILE" 2>&1; then
+    log "ok: $ref"
+  else
+    rc=$?
+    log "FAILED (exit $rc): $ref"
+    FAILED=$((FAILED + 1))
+  fi
+done
+
+REMAINING=$(python3 "$CONSOLIDATE_PY" pending --json 2>/dev/null | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo "?")
+log "done: ${#REFS[@]} ref(s) attempted, $FAILED failed, $REMAINING entr(y/ies) still pending overall"
+
+exit $(( FAILED > 0 ? 1 : 0 ))
