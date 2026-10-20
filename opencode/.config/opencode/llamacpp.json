@@ -6,7 +6,7 @@
       "name": "llama.cpp (qwen-llama-server / dsh-go)",
       "npm": "@ai-sdk/openai-compatible",
       "options": {
-        "baseURL": "http://127.0.0.1:8080/v1"
+        "baseURL": "http://127.0.0.1:11435/v1"
       },
       "models": {
         "qwen3-coder": {

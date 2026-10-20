@@ -21,7 +21,7 @@
 set -uo pipefail
 
 ALIAS=${PI_GO_ALIAS:-qwen3-coder}
-PORTS=${PI_GO_PORTS:-"8080 8081 8082 8083 8084"}
+PORTS=${PI_GO_PORTS:-"11435 11436 11437 11438 11439 8080 8081 8082 8083 8084"}
 
 usage() {
   cat <<'HELP'
@@ -60,7 +60,8 @@ SUBAGENT USE
 ENVIRONMENT
   PI_GO_BASE_URL=URL   Use this endpoint verbatim; skips discovery entirely.
                        e.g. PI_GO_BASE_URL=http://localhost:9000/v1 pi-go -p "hi"
-  PI_GO_PORTS="..."    Ports to probe for a running server (default 8080-8084).
+  PI_GO_PORTS="..."    Ports to probe for a running server (default 11435-11439, then
+                       the old 8080-8084 for a server still up from before the move).
   PI_GO_ALIAS=NAME     Model alias to look for and request (default qwen3-coder).
   PI_GO_CTX=N          Advertise this context window instead of asking the server.
   PI_GO_THINKING=lvl   Thinking level in -p mode (default low; off|minimal|low|…|max).

@@ -55,7 +55,7 @@ IMG="${LLAMA_IMG:-ghcr.io/ggml-org/llama.cpp:server-cuda}"
 GGUF_DIR="${LLAMA_GGUF_DIR:-$HOME/.cache/gguf}"
 FILE="${LLAMA_GGUF_FILE:-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-fit16gib.gguf}"
 ALIAS="${LLAMA_ALIAS:-qwen3-coder}"
-PORT="${LLAMA_PORT:-8080}"; CTX="${LLAMA_CTX:-32768}"; NCMOE="${LLAMA_NCMOE:-12}"
+PORT="${LLAMA_PORT:-11435}"; CTX="${LLAMA_CTX:-32768}"; NCMOE="${LLAMA_NCMOE:-12}"
 NAME="${LLAMA_NAME:-qwen-coder}"
 NLAYERS="${LLAMA_NLAYERS:-64}"
 # -ngl: layers on GPU. <99 = whole-layer offload (attention too) — disables the fused

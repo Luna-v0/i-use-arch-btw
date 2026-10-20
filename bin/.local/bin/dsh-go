@@ -16,20 +16,6 @@ dsh-go — start the local coding model, open the dsh TUI, stop the model on exi
 
 USAGE
   dsh-go [--smart|--flash|--nemo] [--resume [ID]] [profile] [other dsh flags...]
-  dsh-go --lab [--smart|--flash|--nemo] [--resume [ID]]
-  dsh-go --deepseek [--resume [ID]]
-
-LAB MODES  (the isolated dsh-lab study home, DSH_HOME=~/.dsh-lab -- never the
-daily ~/.dsh; see /mnt/hd/Repos/dsh-lab)
-  --lab      Local model (same choices as above) + the lab home's `lab` profile,
-             run directly on the installed dsh (0.1.1-rc.2) -- dsh-tui doesn't
-             mount on 0.2.1 yet, so this flag stays on 0.1.1-rc.2 on purpose.
-             A bare profile word still overrides `lab`. (The separate `dsh-lab`
-             wrapper runs the 0.2.1 side-by-side install instead, for
-             headless/eval use only, until dsh-tui ships a 0.2.x release.)
-  --deepseek The lab home, DeepSeek Flash selected (--patch
-             $DSH_HOME/deepseek-flash.patch.yml). Starts NO local model and
-             uses NO VRAM or GPU -- skips the whole model-ladder/docker step.
 
 MODELS  (same port + alias in every mode, so dsh needs no reconfig)
   (default)  Qwen3.6-35B-A3B Q4_K_M — SWE-bench 73.4 coding flagship. 3B active, experts
@@ -69,8 +55,9 @@ ENVIRONMENT
                  simultaneous agents, lower to save VRAM. Driving VRAM is the POOL,
                  not LLAMA_CTX.
   LLAMA_PORT=N   Serve on this port instead of auto-picking. By default dsh-go reuses a
-                 port its own server is already on, else the first free of 8080-8084,
-                 and tells dsh via DSH_LOCAL_PORT.
+                 port its own server is already on (checking 11435-11439, then the old
+                 8080-8084 in case one is still up from before the port moved), else
+                 starts on the first free of 11435-11439, and tells dsh via DSH_LOCAL_PORT.
   LLAMA_NCMOE=N  Expert-offload override: how many layers keep their MoE experts in RAM.
                  Lower = more on GPU = faster, but fails to load if too low. Auto-laddered
                  by POOL if unset (512k pool needs >=26; 32 is the default for headroom).
@@ -89,7 +76,6 @@ HELP
 }
 
 MODE=q35; PROFILE=tui; PROFILE_EXPLICIT=0; RESUME=0; RESUME_ID=""; APP_ARGS=()
-LAB=0; DEEPSEEK=0
 args=("$@"); i=0
 while [ "$i" -lt "${#args[@]}" ]; do
   a=${args[$i]}
@@ -98,8 +84,6 @@ while [ "$i" -lt "${#args[@]}" ]; do
     --flash) MODE=flash ;;          # Qwen3.8-Flash-Next 125B (big smarts, slow 1st prompt)
     --nemo) MODE=nemo ;;            # Nemotron 3.5 Lightning 30B-A3B (fast, weaker)
     --smart) MODE=smart ;;          # Qwen3.8-27B dense, all in VRAM (LLAMA_PROFILE=smart)
-    --lab) LAB=1 ;;                 # isolated dsh-lab home, local model (see usage)
-    --deepseek) LAB=1; DEEPSEEK=1 ;; # isolated dsh-lab home, DeepSeek Flash, no local model
     --resume)                       # resume a session; optional id after it
       RESUME=1
       nxt=${args[$((i+1))]:-}
@@ -111,48 +95,34 @@ while [ "$i" -lt "${#args[@]}" ]; do
   i=$((i+1))
 done
 
-if [ "$LAB" = 1 ]; then
-  export DSH_HOME="${DSH_LAB_HOME:-$HOME/.dsh-lab}" DSH_TELEMETRY_DISABLED=1
-  [ -d "$DSH_HOME/profiles" ] || { echo "dsh-go --lab: $DSH_HOME is not set up (see /mnt/hd/Repos/dsh-lab docs/04-phased-plan.md)" >&2; exit 1; }
-  [ "$PROFILE_EXPLICIT" = 1 ] || PROFILE=lab
-fi
-
-# --deepseek: the lab home, DeepSeek Flash, no local model, no VRAM/GPU use at
-# all -- skip the entire model-ladder/docker/port-selection path below and go
-# straight to dsh. Separate from --lab's branch above so it can exit early.
-if [ "$DEEPSEEK" = 1 ]; then
-  PATCH="$DSH_HOME/deepseek-flash.patch.yml"
-  [ -f "$PATCH" ] || { echo "dsh-go --deepseek: missing $PATCH (see /mnt/hd/Repos/dsh-lab templates/home/deepseek-flash.patch.yml)" >&2; exit 1; }
-  if [ "$RESUME" = 1 ] && [ -z "$RESUME_ID" ]; then
-    key="--$(pwd | sed 's:^/::; s:/:-:g')--"
-    latest=$(ls -1dt "$DSH_HOME/sessions/$key"/main-session-* 2>/dev/null | head -1)
-    if [ -n "$latest" ]; then RESUME_ID=$(basename "$latest"); printf '↩  resuming %s\n' "$RESUME_ID"
-    else echo "↩  no prior session for $(pwd) — starting fresh"; RESUME=0; fi
-  fi
-  [ "$RESUME" = 1 ] && [ -n "$RESUME_ID" ] && APP_ARGS+=(--resume "$RESUME_ID")
-  exec dsh --profile "$PROFILE" --patch "$PATCH" ${APP_ARGS[@]+"${APP_ARGS[@]}"}
-fi
-
 DEFAULT_MODE=q35
 
-# Port choice. :8080 is the default, but anything else on the box may own it (a
-# docker-compose work stack, say) — and with the port hardcoded dsh-go just died
-# with a misleading "too tight, more experts -> CPU" (a VRAM diagnosis for what was
-# really "port is already allocated"). So: reuse a port where OUR server is already
-# serving, else take the first free one. dsh is told the choice through
+# Port choice. :11435 is the default (next to ollama's 11434), but anything else on
+# the box may own it — and with the port hardcoded dsh-go just died with a misleading
+# "too tight, more experts -> CPU" (a VRAM diagnosis for what was really "port is
+# already allocated"). So: reuse a port where OUR server is already serving, else
+# take the first free one from the start list. dsh is told the choice through
 # DSH_LOCAL_PORT, which cordis.patch.yml reads (same trick as DSH_LOCAL_CTX).
-PORTS=${LLAMA_PORT:-"8080 8081 8082 8083 8084"}
+# The reuse probe also checks the old 8080-8084 range, so a server still running
+# there from before the port moved is found and reused rather than restarted; a
+# fresh start never lands on 8080-8084. When LLAMA_PORT is set explicitly, only
+# that one port is tried (no legacy fallback).
+LEGACY_PORTS="8080 8081 8082 8083 8084"
+PORTS=${LLAMA_PORT:-"11435 11436 11437 11438 11439"}
+REUSE_PORTS=$PORTS
+[ -n "${LLAMA_PORT:-}" ] || REUSE_PORTS="$PORTS $LEGACY_PORTS"
 # Identify our own server by the model alias: a foreign app can answer /health too,
 # and pointing dsh at someone else's service would be worse than failing.
 is_ours()   { curl -s --max-time 2 "http://localhost:$1/v1/models" 2>/dev/null | grep -q "$ALIAS"; }
 port_free() { ! ss -tln 2>/dev/null | awk 'NR>1{print $4}' | grep -qE "[:.]$1\$"; }
 PORT=""
-for p in $PORTS; do is_ours   "$p" && { PORT=$p; REUSED=1; break; }; done
+for p in $REUSE_PORTS; do is_ours   "$p" && { PORT=$p; REUSED=1; break; }; done
 [ -n "$PORT" ] || for p in $PORTS; do port_free "$p" && { PORT=$p; break; }; done
 [ -n "$PORT" ] || { echo "no free port among: $PORTS  (pick one with LLAMA_PORT=N)"; exit 1; }
 url=http://localhost:$PORT
 export LLAMA_PORT="$PORT" DSH_LOCAL_PORT="$PORT"
-[ "$PORT" = 8080 ] || printf 'ℹ  :8080 is taken — serving on :%s (dsh follows via DSH_LOCAL_PORT)\n' "$PORT"
+set -- $PORTS; PREFERRED=$1
+[ "$PORT" = "$PREFERRED" ] || printf 'ℹ  :%s is taken — serving on :%s (dsh follows via DSH_LOCAL_PORT)\n' "$PREFERRED" "$PORT"
 
 # The default mode reuses a server that's already up; an explicit mode flag always
 # (re)starts its own model and stops it on exit.

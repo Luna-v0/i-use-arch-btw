@@ -102,7 +102,7 @@ and keep each one narrow, rather than launching them together.
 PI_GO_TIMEOUT=600 pi-go -p "..."     # longer cap for a big survey (0 disables)
 PI_GO_THINKING=minimal pi-go -p "..." # faster, for mechanical lookups
 PI_GO_TOOLS="read,grep,ls,bash" pi-go -p "..."   # custom allowlist
-PI_GO_BASE_URL=http://host:8081/v1 pi-go -p "..." # pin the endpoint explicitly
+PI_GO_BASE_URL=http://host:11436/v1 pi-go -p "..." # pin the endpoint explicitly
 ```
 
 ## Validation
@@ -119,8 +119,9 @@ Expect `SUBOK` and exit `0` within roughly 10 seconds.
 
 *   **"no local model server serving ..."** — nothing is listening. Start the model
     (`dsh-go`, or `PI_GO_START=1 pi-go -p "..."`), or set `PI_GO_BASE_URL` to the
-    endpoint. `pi-go` probes ports 8080-8084 and identifies the server by its model
-    alias, so it will not accidentally talk to an unrelated service on 8080.
+    endpoint. `pi-go` probes ports 11435-11439 (then the legacy 8080-8084) and
+    identifies the server by its model alias, so it will not accidentally talk to an
+    unrelated service on one of those ports.
 *   **`pi-go: command not found`** — it lives in the dotfiles `bin` stow package and
     must be on `PATH`.
 *   **Answers look confused or truncated** — the task was probably too broad for one
